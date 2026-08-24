@@ -596,10 +596,234 @@ const charts = (() => {
   return {line, bars, columns, heat, tabla, destroyAll, token, pct, num};
 })();
 </script>
-<script id="mod-views"></script>
+<script id="mod-views">
+const views = (() => {
+  const estado = {vista: 'global', responsable: null, formulario: null};
+  const contenedor = document.getElementById('view');
+
+  /** Card con título y, opcionalmente, un botón que alterna gráfico/tabla. */
+  function card(titulo, subtitulo) {
+    const div = document.createElement('div');
+    div.className = 'card';
+    const h = document.createElement('h2');
+    h.textContent = titulo;
+    div.appendChild(h);
+    if (subtitulo) {
+      const s = document.createElement('div');
+      s.className = 'sub';
+      s.textContent = subtitulo;
+      div.appendChild(s);
+    }
+    return div;
+  }
+
+  /** Zona de contenido dentro de un card.
+   *
+   * charts.tabla() hace replaceChildren() sobre su contenedor, así que
+   * pasarle el card directamente borraría su <h2>. Siempre se le pasa una
+   * zona propia.
+   */
+  function zonaDe(tarjeta) {
+    const zona = document.createElement('div');
+    tarjeta.appendChild(zona);
+    return zona;
+  }
+
+  function conTabla(tarjeta, columnas, filas, dibujarGrafico) {
+    const zona = document.createElement('div');
+    tarjeta.appendChild(zona);
+    const boton = document.createElement('button');
+    boton.className = 'chip';
+    boton.type = 'button';
+    boton.style.marginTop = '10px';
+    let mostrandoTabla = false;
+    const pintar = () => {
+      zona.replaceChildren();
+      if (mostrandoTabla) charts.tabla(zona, columnas, filas);
+      else dibujarGrafico(zona);
+      boton.textContent = mostrandoTabla ? 'Ver gráfico' : 'Ver tabla';
+    };
+    boton.addEventListener('click', () => { mostrandoTabla = !mostrandoTabla; pintar(); });
+    tarjeta.appendChild(boton);
+    pintar();
+  }
+
+  function plot(zona, id) {
+    const caja = document.createElement('div');
+    caja.className = 'plot';
+    const lienzo = document.createElement('canvas');
+    lienzo.id = id;
+    caja.appendChild(lienzo);
+    zona.appendChild(caja);
+    return lienzo;
+  }
+
+  function vacio(mensaje) {
+    const div = document.createElement('div');
+    div.className = 'empty';
+    div.textContent = mensaje;
+    return div;
+  }
+
+  function kpi(etiqueta, valor, delta) {
+    const div = document.createElement('div');
+    div.className = 'kpi';
+    const l = document.createElement('div');
+    l.className = 'label';
+    l.textContent = etiqueta;
+    const v = document.createElement('div');
+    v.className = 'value';
+    v.textContent = valor;
+    div.append(l, v);
+    if (delta) {
+      const d = document.createElement('div');
+      d.className = 'delta';
+      d.textContent = delta;
+      div.appendChild(d);
+    }
+    return div;
+  }
+
+  function render() {
+    charts.destroyAll();
+    contenedor.replaceChildren();
+    const filas = store.activeRows();
+    if (!filas.length) {
+      contenedor.appendChild(vacio('Sin registros para estos filtros.'));
+      return;
+    }
+    if (estado.vista === 'global') renderGlobal(filas);
+    else if (estado.vista === 'responsable') renderResponsable(filas);
+    else renderFormulario(filas);
+  }
+
+  // renderGlobal, renderResponsable y renderFormulario se añaden en las
+  // tasks 10, 11 y 12. Hasta entonces son marcadores visibles.
+  function renderGlobal(filas) {
+    contenedor.appendChild(vacio('Vista global — pendiente (Task 10)'));
+  }
+  function renderResponsable(filas) {
+    contenedor.appendChild(vacio('Vista responsable — pendiente (Task 11)'));
+  }
+  function renderFormulario(filas) {
+    contenedor.appendChild(vacio('Vista formulario — pendiente (Task 12)'));
+  }
+
+  return {estado, render, card, conTabla, zonaDe, plot, vacio, kpi};
+})();
+</script>
 <script id="mod-app">
 document.getElementById('meta').textContent =
   DATA.meta.filas + ' supervisiones · generado ' + DATA.meta.generado;
+
+const app = (() => {
+  const barra = document.getElementById('filters');
+  const zonaChips = document.getElementById('chips');
+
+  const ETIQUETAS = {
+    medida: 'Medida', submedida: 'Submedida', unidad: 'Unidad / servicio',
+    grupo: 'Grupo ocupacional', cargo: 'Cargo', estado: 'Estado de validación'
+  };
+  const DIA_MS = 86400000;
+  const aISO = dia => new Date(dia * DIA_MS).toISOString().slice(0, 10);
+  const aDia = iso => Math.floor(Date.parse(iso) / DIA_MS);
+
+  function selector(clave) {
+    const label = document.createElement('label');
+    label.textContent = ETIQUETAS[clave];
+    const sel = document.createElement('select');
+    const todos = document.createElement('option');
+    todos.value = '';
+    todos.textContent = 'Todos';
+    sel.appendChild(todos);
+    DATA.dims[clave].forEach((valor, i) => {
+      const op = document.createElement('option');
+      op.value = String(i);
+      op.textContent = valor;   // valor del Excel: textContent, no innerHTML
+      sel.appendChild(op);
+    });
+    sel.addEventListener('change', () => {
+      store.set(clave, sel.value === '' ? null : Number(sel.value));
+    });
+    sel.dataset.clave = clave;
+    label.appendChild(sel);
+    return label;
+  }
+
+  function fecha(clave, texto) {
+    const label = document.createElement('label');
+    label.textContent = texto;
+    const input = document.createElement('input');
+    input.type = 'date';
+    input.min = aISO(DATA.meta.dia_min);
+    input.max = aISO(DATA.meta.dia_max);
+    input.addEventListener('change', () => {
+      store.set(clave, input.value ? aDia(input.value) : null);
+    });
+    input.dataset.clave = clave;
+    label.appendChild(input);
+    return label;
+  }
+
+  function construirBarra() {
+    // El rango de fechas va primero: es el filtro al que todos van.
+    barra.append(fecha('desde', 'Desde'), fecha('hasta', 'Hasta'));
+    store.dimsFiltrables.forEach(k => barra.appendChild(selector(k)));
+    const limpiar = document.createElement('button');
+    limpiar.className = 'chip';
+    limpiar.type = 'button';
+    limpiar.textContent = 'Limpiar filtros';
+    limpiar.addEventListener('click', () => {
+      barra.querySelectorAll('select, input').forEach(c => { c.value = ''; });
+      store.clearAll();
+    });
+    barra.appendChild(limpiar);
+  }
+
+  function pintarChips() {
+    zonaChips.replaceChildren();
+    for (const [clave, valor] of Object.entries(store.filters)) {
+      if (valor === null) continue;
+      const chip = document.createElement('button');
+      chip.className = 'chip';
+      chip.type = 'button';
+      const texto = clave === 'desde' ? 'Desde ' + aISO(valor)
+        : clave === 'hasta' ? 'Hasta ' + aISO(valor)
+        : ETIQUETAS[clave] + ': ' + DATA.dims[clave][valor];
+      chip.textContent = texto + ' ✕';
+      chip.addEventListener('click', () => {
+        const control = barra.querySelector(`[data-clave="${clave}"]`);
+        if (control) control.value = '';
+        store.clear(clave);
+      });
+      zonaChips.appendChild(chip);
+    }
+  }
+
+  function pestanas() {
+    document.querySelectorAll('.tabs button').forEach(b => {
+      b.addEventListener('click', () => {
+        document.querySelectorAll('.tabs button').forEach(otro =>
+          otro.setAttribute('aria-selected', String(otro === b)));
+        views.estado.vista = b.dataset.view;
+        views.render();
+      });
+    });
+  }
+
+  construirBarra();
+  pestanas();
+  store.onChange(() => { pintarChips(); views.render(); });
+  // Repintar los gráficos al cambiar de tema: Chart.js copió los colores
+  // al construirse y no vuelve a leer las variables CSS por su cuenta.
+  window.addEventListener('themechange', () => views.render());
+  matchMedia('(prefers-color-scheme: dark)')
+    .addEventListener('change', () => views.render());
+  views.render();
+
+  return {pintarChips};
+})();
+
 document.getElementById('theme').addEventListener('click', () => {
   const actual = document.documentElement.getAttribute('data-theme');
   document.documentElement.setAttribute('data-theme', actual === 'dark' ? 'light' : 'dark');
