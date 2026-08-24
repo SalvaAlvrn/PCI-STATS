@@ -175,7 +175,13 @@ y cambiar la línea del resumen que contaba nombres normalizados:
 }
 ```
 
-`nombres.json`, **no versionado**, con los reales. Créalo copiando los dos pares que hoy están en `SLUG_NAME_MAP` antes de borrarlos: las claves `ana_mar_a_p_rez_g_mez` y `luis_fernando_l_pez_d_az` con sus nombres acentuados. Si ya borraste la constante, recupéralos con `git show HEAD:build_dashboard.py | grep -A3 SLUG_NAME_MAP`.
+`nombres.json`, **no versionado**, con los reales. Créalo copiando los dos pares que hoy están en `SLUG_NAME_MAP` **antes** de borrar la constante:
+
+```bash
+grep -A4 "SLUG_NAME_MAP = {" build_dashboard.py
+```
+
+Si ya la borraste, recupéralos con `git show HEAD:build_dashboard.py | grep -A4 SLUG_NAME_MAP`.
 
 Añadir a `.gitignore`, después de la línea `SupPCI.xlsx`:
 
@@ -199,7 +205,7 @@ def nombres_ok():
 
 En `tests/test_build.py`:
 - Toda llamada a `validate(registros, formularios)` pasa a `validate(registros, formularios, nombres_ok)`, y toda llamada a `clean(registros, formularios)` a `clean(registros, formularios, nombres_ok)`. Añadir `nombres_ok` a los parámetros de cada prueba afectada.
-- Las aserciones que buscaban `"Ana María Pérez Gómez"` pasan a buscar `"Ana María Pérez Gómez"`.
+- Las aserciones que buscaban el primer nombre real del mapa pasan a buscar `"Ana María Pérez Gómez"`, el primero de `nombres.json.ejemplo`.
 - Las pruebas que corren sobre el libro real (`test_validate_pasa_sobre_el_excel_real`, `test_clean_sobre_el_excel_real_conserva_todas_las_filas`, las tres cifras de control y las dos de `render_html`) necesitan el mapa real: usan `cargar_nombres()` sin argumento. Si `nombres.json` no existe en la máquina, esas pruebas fallarán con un mensaje claro, que es el comportamiento correcto.
 
 **No debilites ninguna aserción.** Si una expectativa deja de cuadrar, el fixture cambió de forma inesperada: revísalo en vez de ajustar el número.
@@ -211,8 +217,18 @@ Expected: PASS, 36 pruebas (31 previas + 5 nuevas).
 
 - [ ] **Step 8: Verificar que no queda ningún nombre real**
 
+Los nombres a buscar se leen de `nombres.json`, para no escribirlos en un
+archivo versionado. Busca en todo el árbol excepto el propio `nombres.json`,
+que está ignorado y sí debe contenerlos:
+
 ```bash
-grep -rn "Pérez Gómez\|López Díaz\|claudia_guadalupe\|jonathan_ulises" build_dashboard.py tests/ README.md
+python - <<'PY' > /tmp/patrones.txt
+import json
+mapa = json.load(open("nombres.json", encoding="utf-8"))
+print("\n".join(list(mapa) + list(mapa.values())))
+PY
+grep -rnFf /tmp/patrones.txt --exclude=nombres.json --exclude-dir=.git . ; echo "salida vacía = correcto"
+rm /tmp/patrones.txt
 ```
 
 Expected: sin coincidencias. Si alguna aparece, no continúes: quítala antes de commitear.
@@ -666,7 +682,13 @@ El objetivo es que los nombres reales de dos empleados no queden en el historial
 ```bash
 git status --short
 git log --oneline origin/main..main | wc -l
-git log --oneline -S"Pérez Gómez" --all | wc -l
+python - <<'PY'
+import json, subprocess
+apellido = list(json.load(open("nombres.json", encoding="utf-8")).values())[0]
+salida = subprocess.run(["git", "log", "--oneline", "-S", apellido, "--all"],
+                        capture_output=True, text=True).stdout
+print(f"commits con el primer nombre real: {len(salida.splitlines())}")
+PY
 ```
 
 Expected: árbol limpio; una treintena de commits locales sin subir —el número exacto depende de cuántos hicieran las tasks 1 a 3, y no importa—; y **exactamente 6** commits conteniendo los nombres. Ese 6 sí importa: si sale otro número, alguna task posterior volvió a introducir un nombre real y hay que averiguar dónde antes de reescribir. Si el árbol no está limpio, commitea o guarda los cambios antes de seguir.
@@ -688,14 +710,32 @@ python -m git_filter_repo --version
 
 - [ ] **Step 4: Escribir las sustituciones**
 
-Crear `reemplazos.txt` **fuera del repositorio**, por ejemplo en la carpeta temporal del sistema, porque contiene los nombres reales:
+El archivo de sustituciones contiene los nombres reales, así que se **genera**
+desde `nombres.json` y `nombres.json.ejemplo` en lugar de escribirse a mano, y
+se deja **fuera del repositorio**. Cada entrada real se empareja por posición
+con su equivalente ficticio:
 
+```bash
+python - <<'PY' > /tmp/reemplazos.txt
+import json
+reales = json.load(open("nombres.json", encoding="utf-8"))
+ficticios = json.load(open("nombres.json.ejemplo", encoding="utf-8"))
+assert len(reales) == len(ficticios), (
+    "nombres.json y nombres.json.ejemplo deben tener el mismo número de "
+    "entradas para poder emparejarlas"
+)
+for (slug_real, nombre_real), (slug_fic, nombre_fic) in zip(
+    reales.items(), ficticios.items()
+):
+    print(f"{slug_real}==>{slug_fic}")
+    print(f"{nombre_real}==>{nombre_fic}")
+PY
+wc -l /tmp/reemplazos.txt
 ```
-ana_mar_a_p_rez_g_mez==>ana_mar_a_p_rez_g_mez
-luis_fernando_l_pez_d_az==>luis_fernando_l_pez_d_az
-Ana María Pérez Gómez==>Ana María Pérez Gómez
-Luis Fernando López Díaz==>Luis Fernando López Díaz
-```
+
+Expected: `4 /tmp/reemplazos.txt` — dos líneas por persona, el slug y el nombre.
+Si la aserción salta, añade a `nombres.json.ejemplo` tantas entradas ficticias
+como reales tenga `nombres.json`.
 
 - [ ] **Step 5: Reescribir**
 
@@ -708,9 +748,14 @@ python -m git_filter_repo --replace-text /ruta/a/reemplazos.txt --force
 - [ ] **Step 6: Verificar que no queda rastro**
 
 ```bash
-git log --all -S"Pérez Gómez" --oneline | wc -l
-git log --all -S"López Díaz" --oneline | wc -l
-git grep -i "pérez alas" $(git rev-list --all) 2>/dev/null | wc -l
+python - <<'PY'
+import json, subprocess
+mapa = json.load(open("nombres.json", encoding="utf-8"))
+for aguja in list(mapa) + list(mapa.values()):
+    salida = subprocess.run(["git", "log", "--all", "--oneline", "-S", aguja],
+                            capture_output=True, text=True).stdout
+    print(f"{len(salida.splitlines()):3d} commits contienen {aguja!r}")
+PY
 ```
 
 Expected: `0` en los tres. Si alguno no es cero, **detente**: la reescritura no fue completa y publicar el repositorio expondría los nombres.
