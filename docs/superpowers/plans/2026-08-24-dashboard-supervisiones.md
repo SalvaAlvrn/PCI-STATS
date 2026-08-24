@@ -1439,7 +1439,7 @@ const agg = (() => {
 - [ ] **Step 4: Copiar al harness y ejecutar**
 
 Copiar el módulo dentro de `<script id="mod-agg">` en `tests/test_agg.html` y recargar.
-Expected: `26 pasan, 0 fallan`.
+Expected: `27 pasan, 0 fallan` — las 5 aserciones de `store` de la Task 6 más las 22 de `agg` de esta.
 
 - [ ] **Step 5: Commit**
 
@@ -2676,7 +2676,7 @@ python build_dashboard.py
 ls -lh dashboard.html
 ```
 
-Expected: 26 pruebas PASS. El build imprime el resumen completo. Abrir `tests/test_agg.html` y confirmar `26 pasan, 0 fallan`.
+Expected: 26 pruebas PASS. El build imprime el resumen completo. Abrir `tests/test_agg.html` y confirmar `27 pasan, 0 fallan`.
 
 Registrar el tamaño real del archivo. El medido tras la Task 5 fue de 583 KB; si supera 2 MB, revisar si `texts.conclusiones` creció.
 
