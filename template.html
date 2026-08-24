@@ -1019,8 +1019,209 @@ const views = (() => {
     render();
   }
 
+  const TOPE_MOTIVOS = 10;
+  const SIN_RIESGO = '(Sin nivel de riesgo)';
+
+  function selectorFormulario(disponibles) {
+    const label = document.createElement('label');
+    label.style.cssText = 'display:flex;flex-direction:column;font-size:12px;gap:3px';
+    label.textContent = 'Formulario';
+    const sel = document.createElement('select');
+    sel.style.cssText = 'font:inherit;font-size:14px;padding:6px 9px;border-radius:7px;' +
+      'border:1px solid var(--border);background:var(--surface);color:var(--text-primary)';
+    disponibles.forEach(idx => {
+      const id = DATA.dims.formulario[idx];
+      const op = document.createElement('option');
+      op.value = String(idx);
+      op.textContent = DATA.forms[id].nombre;
+      if (idx === estado.formulario) op.selected = true;
+      sel.appendChild(op);
+    });
+    sel.addEventListener('change', () => {
+      estado.formulario = Number(sel.value);
+      render();
+    });
+    label.appendChild(sel);
+    return label;
+  }
+
   function renderFormulario(filas) {
-    contenedor.appendChild(vacio('Vista formulario — pendiente (Task 12)'));
+    const disponibles = [...new Set(filas.map(i => DATA.rows.formulario[i]))]
+      .sort((a, b) => DATA.forms[DATA.dims.formulario[a]].nombre
+        .localeCompare(DATA.forms[DATA.dims.formulario[b]].nombre, 'es'));
+    if (estado.formulario === null || !disponibles.includes(estado.formulario)) {
+      estado.formulario = disponibles[0];
+    }
+
+    const id = DATA.dims.formulario[estado.formulario];
+    const meta = DATA.forms[id];
+    const suyas = filas.filter(i => DATA.rows.formulario[i] === estado.formulario);
+
+    const cabecera = document.createElement('div');
+    cabecera.style.cssText = 'display:flex;gap:16px;align-items:flex-end;margin-bottom:8px';
+    cabecera.appendChild(selectorFormulario(disponibles));
+    contenedor.appendChild(cabecera);
+
+    const ficha = document.createElement('div');
+    ficha.className = 'sub';
+    ficha.style.marginBottom = '16px';
+    ficha.textContent =
+      `${meta.medida} · ${meta.submedida} · versión ${meta.version} · ${id}`;
+    contenedor.appendChild(ficha);
+
+    if (!suyas.length) {
+      contenedor.appendChild(vacio('Sin registros de este formulario para estos filtros.'));
+      return;
+    }
+
+    const k = agg.kpis(suyas);
+    const fila = document.createElement('div');
+    fila.className = 'kpis';
+    fila.style.marginBottom = '16px';
+    fila.append(
+      kpi('Supervisiones', charts.num(k.total)),
+      kpi('Tasa de cumplimiento', charts.pct(k.tasa),
+          charts.num(k.sinDictamen) + ' sin dictamen'),
+      kpi('Responsables', charts.num(k.responsables)),
+      kpi('Aprobados', charts.pct(k.tasaAprobado))
+    );
+    contenedor.appendChild(fila);
+
+    // Evolución y volumen: de nuevo dos plots apilados, nunca doble eje.
+    const s = agg.series(suyas, 'mes');
+    const rejillaTiempo = document.createElement('div');
+    rejillaTiempo.className = 'grid-2';
+    const tTasa = card('Tasa de cumplimiento por mes', null);
+    conTabla(tTasa,
+      [{titulo: 'Mes'}, {titulo: 'Tasa', num: true, formato: charts.pct}],
+      s.labels.map((l, i) => [l, s.tasa[i]]),
+      zona => charts.line(plot(zona, 'f-tasa'), {
+        labels: s.labels,
+        series: [{label: 'Tasa de cumplimiento', data: s.tasa,
+                  color: charts.token('series-1')}]
+      }));
+    const tVol = card('Supervisiones por mes', null);
+    conTabla(tVol,
+      [{titulo: 'Mes'}, {titulo: 'Supervisiones', num: true}],
+      s.labels.map((l, i) => [l, s.volumen[i]]),
+      zona => charts.columns(plot(zona, 'f-vol'), {
+        labels: s.labels, values: s.volumen, formato: charts.num
+      }));
+    rejillaTiempo.append(tTasa, tVol);
+    contenedor.appendChild(rejillaTiempo);
+
+    // Desglose por unidad, área, grupo y responsable.
+    const rejilla = document.createElement('div');
+    rejilla.className = 'grid-2';
+    for (const [clave, titulo] of [
+      ['unidad', 'Unidad / servicio'], ['area', 'Área específica'],
+      ['grupo', 'Grupo ocupacional'], ['responsable', 'Responsable']
+    ]) {
+      const datos = agg.rateBy(suyas, clave).slice(0, TOPE_BARRAS);
+      const tarjeta = card(titulo, null);
+      conTabla(tarjeta,
+        [{titulo}, {titulo: 'Supervisiones', num: true},
+         {titulo: 'Tasa', num: true, formato: charts.pct}],
+        datos.map(e => [e.label, e.total, e.tasa]),
+        zona => {
+          const caja = document.createElement('div');
+          caja.className = 'plot';
+          caja.style.height = Math.max(140, datos.length * 24 + 40) + 'px';
+          const lienzo = document.createElement('canvas');
+          caja.appendChild(lienzo);
+          zona.appendChild(caja);
+          charts.bars(lienzo, {
+            labels: datos.map(e => `${e.label} (${e.total})`),
+            values: datos.map(e => e.tasa),
+            formato: charts.pct
+          });
+        });
+      rejilla.appendChild(tarjeta);
+    }
+    contenedor.appendChild(rejilla);
+
+    // Estado de validación: dos clases, tabla directa. Un gráfico de dos
+    // barras no añadiría nada a dos números.
+    const porEstado = agg.rateBy(suyas, 'estado');
+    const tEstado = card('Estado de validación', null);
+    charts.tabla(zonaDe(tEstado),
+      [{titulo: 'Estado'}, {titulo: 'Supervisiones', num: true},
+       {titulo: 'Tasa', num: true, formato: charts.pct}],
+      porEstado.map(e => [e.label, e.total, e.tasa]));
+    contenedor.appendChild(tEstado);
+
+    // Nivel de riesgo: solo si hay algo más que "(Sin nivel de riesgo)".
+    const porRiesgo = agg.rateBy(suyas, 'riesgo')
+      .filter(e => e.label !== SIN_RIESGO);
+    const tRiesgo = card('Nivel de riesgo', null);
+    if (porRiesgo.length) {
+      charts.tabla(zonaDe(tRiesgo),
+        [{titulo: 'Nivel'}, {titulo: 'Supervisiones', num: true}],
+        porRiesgo.map(e => [e.label, e.total]));
+    } else {
+      tRiesgo.appendChild(vacio('Sin datos de riesgo para este formulario.'));
+    }
+    contenedor.appendChild(tRiesgo);
+
+    // Motivos de no cumplimiento. Texto libre, 366 valores distintos en el
+    // conjunto completo: cola larga. Top 10 y el resto agrupado.
+    const fallidas = suyas.filter(i => DATA.rows.cumple[i] === 0);
+    const tMotivos = card('Motivos de no cumplimiento',
+                          `${fallidas.length} supervisiones no cumplieron.`);
+    if (fallidas.length) {
+      const cuenta = new Map();
+      for (const i of fallidas) {
+        const m = DATA.dims.motivo[DATA.rows.motivo[i]] || '(Sin motivo indicado)';
+        cuenta.set(m, (cuenta.get(m) || 0) + 1);
+      }
+      const orden = [...cuenta.entries()].sort((a, b) => b[1] - a[1]);
+      const top = orden.slice(0, TOPE_MOTIVOS);
+      const resto = orden.slice(TOPE_MOTIVOS).reduce((n, e) => n + e[1], 0);
+      if (resto) top.push(['Otros motivos', resto]);
+      charts.tabla(zonaDe(tMotivos),
+        [{titulo: 'Motivo'}, {titulo: 'Supervisiones', num: true}], top);
+
+      const detalles = document.createElement('details');
+      detalles.style.marginTop = '10px';
+      const resumenEl = document.createElement('summary');
+      resumenEl.textContent = 'Ver conclusiones y recomendaciones';
+      resumenEl.style.cursor = 'pointer';
+      detalles.appendChild(resumenEl);
+      for (const i of fallidas) {
+        const texto = DATA.texts.conclusiones[String(i)];
+        if (!texto) continue;
+        const p = document.createElement('p');
+        p.style.cssText = 'margin:8px 0;padding-left:10px;border-left:2px solid var(--grid)';
+        const quien = document.createElement('strong');
+        quien.textContent = DATA.dims.responsable[DATA.rows.responsable[i]] + ': ';
+        p.appendChild(quien);
+        p.appendChild(document.createTextNode(texto));
+        detalles.appendChild(p);
+      }
+      tMotivos.appendChild(detalles);
+    } else {
+      tMotivos.appendChild(vacio('Todas las supervisiones de este formulario cumplieron.'));
+    }
+    contenedor.appendChild(tMotivos);
+
+    // Registros individuales.
+    const DIA_MS = 86400000;
+    const tRegistros = card('Registros', null);
+    charts.tabla(zonaDe(tRegistros),
+      [{titulo: 'Fecha'}, {titulo: 'Responsable'}, {titulo: 'Evaluado'},
+       {titulo: 'Unidad'}, {titulo: '%', num: true}, {titulo: 'Sí', num: true},
+       {titulo: 'No', num: true}, {titulo: 'N/A', num: true},
+       {titulo: 'Cumple'}, {titulo: 'Estado'}],
+      suyas.map(i => [
+        new Date(DATA.rows.dia[i] * DIA_MS).toISOString().slice(0, 10),
+        DATA.dims.responsable[DATA.rows.responsable[i]],
+        DATA.texts.evaluado[i],
+        DATA.dims.unidad[DATA.rows.unidad[i]],
+        DATA.rows.pct[i], DATA.rows.si[i], DATA.rows.no[i], DATA.rows.na[i],
+        DATA.rows.cumple[i] === 1 ? 'Sí' : DATA.rows.cumple[i] === 0 ? 'No' : '—',
+        DATA.dims.estado[DATA.rows.estado[i]]
+      ]));
+    contenedor.appendChild(tRegistros);
   }
 
   return {estado, render, card, conTabla, zonaDe, plot, vacio, kpi, irA};
