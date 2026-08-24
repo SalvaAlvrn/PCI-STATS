@@ -58,7 +58,7 @@ Los cinco módulos JS viven en `template.html`, cada uno en su propio bloque `<s
 - [ ] **Step 1: Crear `.gitignore` y el directorio vendor**
 
 ```bash
-printf 'dashboard.html\n__pycache__/\n.pytest_cache/\nvendor/*.js\n.idea/\n' > .gitignore
+printf 'dashboard.html\nSupPCI.xlsx\n__pycache__/\n.pytest_cache/\nvendor/*.js\n.idea/\n' > .gitignore
 mkdir -p vendor tests && touch vendor/.gitkeep
 ```
 
