@@ -1,7 +1,10 @@
 from pathlib import Path
+from unittest.mock import Mock, patch
 
 import pandas as pd
 import pytest
+
+import requests
 
 from build_dashboard import (
     AREA_NULA,
@@ -12,6 +15,9 @@ from build_dashboard import (
     load,
     render_html,
     validate,
+    ID_DOCUMENTO,
+    _descargar_sheet,
+    _extraer_id,
 )
 
 XLSX = Path(__file__).resolve().parent.parent / "SupPCI.xlsx"
@@ -335,3 +341,71 @@ def test_el_ejemplo_versionado_es_cargable():
     mapa = cargar_nombres(ejemplo)
     assert mapa, "la plantilla no puede estar vacía"
     assert all(isinstance(k, str) and isinstance(v, str) for k, v in mapa.items())
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "https://docs.google.com/spreadsheets/d/ABC123_-xyz/edit?gid=7#gid=7",
+        "https://docs.google.com/spreadsheets/d/ABC123_-xyz/edit",
+        "https://docs.google.com/spreadsheets/d/ABC123_-xyz",
+    ],
+)
+def test_extraer_id_reconoce_las_formas_de_url(url):
+    assert _extraer_id(url) == "ABC123_-xyz"
+
+
+def test_extraer_id_rechaza_una_url_ajena():
+    with pytest.raises(BuildError, match="no parece una URL de Google Sheets"):
+        _extraer_id("https://example.com/algo")
+
+
+def test_descargar_sheet_escribe_el_contenido(tmp_path):
+    destino = tmp_path / "sheet.xlsx"
+    respuesta = Mock(status_code=200, content=b"contenido-binario")
+    with patch("build_dashboard.requests.get", return_value=respuesta) as get:
+        _descargar_sheet("ABC123", destino)
+    assert destino.read_bytes() == b"contenido-binario"
+    assert "ABC123" in get.call_args.args[0]
+
+
+def test_descargar_sheet_con_http_no_exitoso_levanta_builderror(tmp_path):
+    respuesta = Mock(status_code=403, content=b"")
+    with patch("build_dashboard.requests.get", return_value=respuesta):
+        with pytest.raises(BuildError, match="403"):
+            _descargar_sheet("ABC123", tmp_path / "sheet.xlsx")
+
+
+def test_descargar_sheet_sin_red_levanta_builderror(tmp_path):
+    with patch(
+        "build_dashboard.requests.get",
+        side_effect=requests.ConnectionError("sin ruta al host"),
+    ):
+        with pytest.raises(BuildError, match="No se pudo contactar"):
+            _descargar_sheet("ABC123", tmp_path / "sheet.xlsx")
+
+
+def test_load_sin_argumento_usa_el_documento_configurado():
+    contenido = XLSX.read_bytes()
+    respuesta = Mock(status_code=200, content=contenido)
+    with patch("build_dashboard.requests.get", return_value=respuesta) as get:
+        registros, formularios = load()
+    assert ID_DOCUMENTO in get.call_args.args[0]
+    assert len(registros) == 2806
+    assert len(formularios) == 76
+
+
+def test_load_con_url_descarga_ese_documento():
+    contenido = XLSX.read_bytes()
+    respuesta = Mock(status_code=200, content=contenido)
+    with patch("build_dashboard.requests.get", return_value=respuesta) as get:
+        registros, _ = load("https://docs.google.com/spreadsheets/d/OTRO_ID/edit")
+    assert "OTRO_ID" in get.call_args.args[0]
+    assert len(registros) == 2806
+
+
+def test_load_con_ruta_sigue_leyendo_el_archivo():
+    with patch("build_dashboard.requests.get") as get:
+        registros, formularios = load(XLSX)
+    get.assert_not_called()
+    assert len(registros) == 2806

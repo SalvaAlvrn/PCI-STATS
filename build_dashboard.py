@@ -5,10 +5,13 @@ Ver docs/superpowers/specs/2026-08-24-dashboard-supervisiones-design.md
 """
 
 import json
+import re
 import sys
+import tempfile
 from pathlib import Path
 
 import pandas as pd
+import requests
 
 
 class BuildError(Exception):
@@ -88,18 +91,81 @@ COLUMNAS_SIN_NULOS = [
 ]
 
 
-def load(path):
-    """Lee las hojas REGISTROS y FORMULARIOS de SupPCI.xlsx."""
+# Documento maestro en Google Sheets. No es un secreto: la hoja es de lectura
+# pública y el id ya aparece en la URL que se comparte con el equipo.
+ID_DOCUMENTO = "1jBPvj080XoeAVbTEKqMgkqPRCQkiitv-3zYbyT2Rvf0"
+URL_EXPORT = "https://docs.google.com/spreadsheets/d/{id}/export?format=xlsx"
+TIMEOUT_SEGUNDOS = 60
+
+
+def _extraer_id(url):
+    """Saca el id del documento de una URL de Google Sheets."""
+    encontrado = re.search(r"/spreadsheets/d/([A-Za-z0-9_-]+)", url)
+    if not encontrado:
+        raise BuildError(f"{url} no parece una URL de Google Sheets")
+    return encontrado.group(1)
+
+
+def _descargar_sheet(id_documento, destino):
+    """Descarga el libro completo como .xlsx.
+
+    Se pide el libro entero y no cada hoja por separado: una sola petición
+    garantiza que REGISTROS y FORMULARIOS vienen del mismo instante, y el
+    formato conserva las fechas como fechas en lugar de como texto.
+    """
+    url = URL_EXPORT.format(id=id_documento)
+    try:
+        respuesta = requests.get(url, timeout=TIMEOUT_SEGUNDOS)
+    except requests.RequestException as error:
+        raise BuildError(
+            f"No se pudo contactar con Google Sheets: {error}. Si necesitas "
+            "publicar igualmente, construye desde un export local pasando su "
+            "ruta: python build_dashboard.py SupPCI.xlsx"
+        )
+    if respuesta.status_code != 200:
+        raise BuildError(
+            f"Google Sheets respondió {respuesta.status_code} al pedir el "
+            f"documento {id_documento}. Comprueba que sigue siendo de lectura "
+            "pública."
+        )
+    destino = Path(destino)
+    destino.write_bytes(respuesta.content)
+    return destino
+
+
+def _leer_libro(path):
+    """Lee las hojas REGISTROS y FORMULARIOS de un libro .xlsx."""
     path = Path(path)
     if not path.exists():
         raise BuildError(f"El archivo {path} no existe")
     libro = pd.ExcelFile(path)
-    faltantes = {"REGISTROS", "FORMULARIOS"} - set(libro.sheet_names)
-    if faltantes:
-        raise BuildError(f"Faltan hojas en el libro: {sorted(faltantes)}")
-    registros = pd.read_excel(libro, "REGISTROS")
-    formularios = pd.read_excel(libro, "FORMULARIOS")
+    try:
+        faltantes = {"REGISTROS", "FORMULARIOS"} - set(libro.sheet_names)
+        if faltantes:
+            raise BuildError(f"Faltan hojas en el libro: {sorted(faltantes)}")
+        registros = pd.read_excel(libro, "REGISTROS")
+        formularios = pd.read_excel(libro, "FORMULARIOS")
+    finally:
+        libro.close()
     return registros, formularios
+
+
+def load(origen=None):
+    """Lee REGISTROS y FORMULARIOS del Sheet en vivo o de un .xlsx local.
+
+    Sin argumento usa el documento configurado en ID_DOCUMENTO. Con una URL
+    de Sheets usa ese documento. Con una ruta lee ese archivo.
+    """
+    if origen is None or str(origen).startswith("http"):
+        id_documento = (
+            ID_DOCUMENTO if origen is None else _extraer_id(str(origen))
+        )
+        with tempfile.TemporaryDirectory() as carpeta:
+            descargado = _descargar_sheet(
+                id_documento, Path(carpeta) / "sheet.xlsx"
+            )
+            return _leer_libro(descargado)
+    return _leer_libro(origen)
 
 
 def _columnas_faltantes(df, esperadas, hoja):
@@ -367,9 +433,13 @@ def render_html(data, template, vendor, salida):
 def main(argv=None):
     argv = sys.argv[1:] if argv is None else argv
     raiz = Path(__file__).resolve().parent
-    origen = Path(argv[0]) if argv else raiz / "SupPCI.xlsx"
+    origen = argv[0] if argv else None
     salida = raiz / "dashboard.html"
 
+    if origen is None:
+        print(f"Leyendo el documento en vivo {ID_DOCUMENTO}")
+    else:
+        print(f"Leyendo {origen}")
     registros, formularios = load(origen)
     print(f"Leídas {len(registros)} filas de REGISTROS")
 
