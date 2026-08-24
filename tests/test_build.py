@@ -226,8 +226,16 @@ def test_render_html_produce_un_archivo_sin_urls_externas(tmp_path):
     assert "/*__DATA__*/" not in html
     assert "/*__CHARTJS__*/" not in html
     assert "Chart" in html
-    assert "https://" not in html
-    assert "http://" not in html
+    # "Funciona sin conexión" quiere decir que nada se descarga al abrir el
+    # archivo, no que la cadena "https" no aparezca en ninguna parte. Una URL
+    # dentro de un comentario — el aviso de licencia MIT de Chart.js, por
+    # ejemplo — no provoca ninguna petición, y borrarla para satisfacer un
+    # assert incumpliría esa licencia. Se comprueban las construcciones que
+    # sí provocan una descarga.
+    for atributo in ('src="http', "src='http", 'href="http', "href='http"):
+        assert atributo not in html, atributo
+    assert "url(http" not in html
+    assert "@import" not in html
 
 
 def test_render_html_embebe_los_datos_reales(tmp_path):
