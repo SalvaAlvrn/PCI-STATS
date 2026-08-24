@@ -2,20 +2,58 @@
 
 Genera un dashboard HTML interactivo y autocontenido a partir de `SupPCI.xlsx`.
 
-## Uso
+## Ver el dashboard
 
-Chart.js se vendoriza pero no se versiona (`vendor/*.js` está en
-`.gitignore`): en un clon nuevo hay que descargarlo antes del primer build.
+<https://salvaalvrn.github.io/PCI-STATS/>
 
+El enlace es fijo. Se comparte una vez y no cambia.
+
+## Actualizar los datos publicados
+
+En GitHub, pestaña **Actions** → **Publicar dashboard** → **Run workflow**.
+
+El workflow lee el Google Sheet en vivo, corre las pruebas, construye y publica.
+Tarda un par de minutos. Si algo falla —el Sheet cambió de forma, una prueba se
+rompió— el workflow se detiene y **no publica**: la URL sigue mostrando la última
+versión buena. Es deliberado: el dashboard prefiere estar desactualizado a
+mostrar cifras equivocadas.
+
+## Generar el dashboard en tu equipo
+
+Una vez, para preparar el entorno:
+
+    pip install -r requirements.txt
     curl -L https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js -o vendor/chart.umd.min.js
+    cp nombres.json.ejemplo nombres.json    # y pon los nombres reales
+
+Después:
+
+    python build_dashboard.py                 # datos en vivo del Google Sheet
+    python build_dashboard.py SupPCI.xlsx     # un export local
+
+Escribe `dashboard.html` en la raíz. El archivo es autocontenido: se abre con
+doble clic y funciona sin conexión.
+
+## nombres.json
+
+Corrige los nombres de responsables que la migración dejó en formato slug. No
+está versionado porque contiene nombres de personas reales y el repositorio es
+público. `nombres.json.ejemplo` muestra el formato con nombres ficticios.
+
+En GitHub vive como el secret **NOMBRES_JSON** (Settings → Secrets and variables
+→ Actions), cuyo contenido es el JSON entero. El workflow lo escribe a disco
+antes de construir.
+
+Si falta, el build aborta con un mensaje que lo explica. No genera un dashboard
+con responsables duplicados.
+
+## Comprobar que la integración con Sheets sigue viva
+
     python build_dashboard.py
 
-Escribe `dashboard.html` en la raíz del repositorio. El archivo no necesita
-conexión ni servidor: se abre con doble clic y se puede enviar por correo.
-
-Para usar otro libro:
-
-    python build_dashboard.py ruta/al/otro.xlsx
+Ninguna prueba automática toca la red, a propósito: así la suite corre sin
+conexión y no falla por razones ajenas al código. Esta es la comprobación
+manual equivalente.
 
 ## Qué contiene el dashboard
 
@@ -67,7 +105,10 @@ equivocadas. Motivos posibles:
   `FORMULARIOS`.
 - Un responsable nuevo con nombre en formato slug (falla la migración de
   acentos).
-- Falta `vendor/chart.umd.min.js` — ver la sección Uso arriba.
+- Falta `vendor/chart.umd.min.js` — ver la sección "Generar el dashboard en tu
+  equipo" arriba.
+- `nombres.json` no existe o no es un JSON de cadenas.
+- Google Sheets no responde, o el documento dejó de ser de lectura pública.
 
 Los nombres en formato slug se corrigen añadiéndolos a `nombres.json`, con su
 acentuación correcta. Ese archivo no está versionado porque contiene nombres

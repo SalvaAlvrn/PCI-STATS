@@ -1,0 +1,4 @@
+pandas==3.0.3
+openpyxl
+requests==2.34.0
+pytest==9.1.1

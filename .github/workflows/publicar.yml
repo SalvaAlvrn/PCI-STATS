@@ -1,0 +1,70 @@
+name: Publicar dashboard
+
+# El botón. Aparece como "Run workflow" en la pestaña Actions.
+on:
+  workflow_dispatch:
+
+# Permisos mínimos para que el job pueda publicar en Pages.
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# Si alguien pulsa el botón dos veces, la segunda ejecución espera en vez de
+# pisar a la primera a medias.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  publicar:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.despliegue.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+
+      - name: Instalar dependencias
+        run: pip install -r requirements.txt
+
+      - name: Escribir el mapa de nombres
+        # Contiene nombres de personas reales y el repositorio es público,
+        # así que vive en un secret y nunca en el árbol de trabajo.
+        run: echo "$NOMBRES_JSON" > nombres.json
+        env:
+          NOMBRES_JSON: ${{ secrets.NOMBRES_JSON }}
+
+      - name: Descargar Chart.js
+        # vendor/*.js no está versionado.
+        run: |
+          curl -fsSL -o vendor/chart.umd.min.js \
+            https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js
+
+      - name: Correr las pruebas
+        # Antes de construir: si el código está roto no se publica nada.
+        run: python -m pytest tests/ -q
+
+      - name: Construir desde el Sheet en vivo
+        # Aborta si el documento cambió de forma. La URL conserva entonces
+        # la última versión buena.
+        run: python build_dashboard.py
+
+      - name: Preparar el sitio
+        run: |
+          mkdir -p sitio
+          cp dashboard.html sitio/index.html
+
+      - uses: actions/configure-pages@v5
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: sitio
+
+      - id: despliegue
+        uses: actions/deploy-pages@v4
