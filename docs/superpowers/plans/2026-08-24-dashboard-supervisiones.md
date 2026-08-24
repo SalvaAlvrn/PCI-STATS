@@ -348,7 +348,6 @@ def validate(registros, formularios):
             f"a {tope.date()}"
         )
 
-    metodos = set(formularios["METODO_CUMPLIMIENTO"].dropna().unique())
     usados = set(registros["ID_FORMULARIO"].unique())
     metodos_usados = set(
         formularios[formularios["ID_FORMULARIO"].isin(usados)][
@@ -363,7 +362,6 @@ def validate(registros, formularios):
             "cumplimiento y requieren una decisión de producto antes de "
             "incluirlos; no se pueden promediar con los SI_NO_NA."
         )
-    del metodos  # solo se valida sobre los métodos realmente usados
 
     slugs = {
         nombre
