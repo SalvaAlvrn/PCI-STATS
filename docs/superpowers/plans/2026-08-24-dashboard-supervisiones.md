@@ -469,7 +469,6 @@ Añadir a `build_dashboard.py`:
 
 ```python
 AREA_NULA = "(Sin área específica)"
-SEGUNDOS_POR_DIA = 86400
 
 
 def _nombres_actuales(formularios):
@@ -513,7 +512,10 @@ def clean(registros, formularios):
     df["SEMANA"] = (
         iso["year"].astype(str) + "-W" + iso["week"].astype(str).str.zfill(2)
     )
-    df["DIA"] = (fecha.astype("int64") // 10**9 // SEGUNDOS_POR_DIA).astype(int)
+    # Días desde epoch. El cast a datetime64[D] es independiente de la
+    # unidad de la columna: pandas 3 usa datetime64[us], de modo que un
+    # astype("int64") daría microsegundos, no nanosegundos.
+    df["DIA"] = fecha.values.astype("datetime64[D]").astype("int64")
 
     df["CUMPLE"] = (
         df["CUMPLE_CORRECTAMENTE"].map({"SI": 1, "NO": 0}).fillna(-1).astype(int)
@@ -1295,11 +1297,11 @@ check('series etiquetas de semana', semana.labels,
 check('series volumen por semana', semana.volumen, [1, 2, 2]);
 
 const calor = agg.heatmap(todas, 'submedida', 'mes');
-check('heatmap filas', calor.rowLabels, ['Barreras', 'Higiene']);
+check('heatmap filas', calor.rowLabels, ['Higiene', 'Barreras']);
 check('heatmap columnas', calor.colLabels, ['2026-07', '2026-08']);
-check('heatmap celda Barreras/agosto', calor.cells[0][1], {tasa: 1, total: 1});
+check('heatmap celda Barreras/agosto', calor.cells[1][1], {tasa: 1, total: 2});
 check('heatmap celda vacía es null',
-      calor.cells[1][1], {tasa: null, total: 0});
+      calor.cells[0][1], {tasa: null, total: 0});
 
 const vacio = agg.kpis([]);
 check('kpis sobre conjunto vacío no divide por cero', vacio.tasa, null);
