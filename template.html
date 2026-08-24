@@ -183,7 +183,118 @@ const store = (() => {
           activeRows, set, clear, clearAll, onChange, emit};
 })();
 </script>
-<script id="mod-agg"></script>
+<script id="mod-agg">
+const agg = (() => {
+  const r = DATA.rows;
+
+  /** Tasa sobre los registros con dictamen. null si no hay ninguno. */
+  function tasaDe(si, no) {
+    const conDictamen = si + no;
+    return conDictamen === 0 ? null : si / conDictamen;
+  }
+
+  function kpis(rows) {
+    let si = 0, no = 0, sin = 0, aprobados = 0;
+    const resp = new Set(), form = new Set();
+    const idxAprobado = DATA.dims.estado.indexOf('Aprobado');
+    for (const i of rows) {
+      if (r.cumple[i] === 1) si++;
+      else if (r.cumple[i] === 0) no++;
+      else sin++;
+      if (r.estado[i] === idxAprobado) aprobados++;
+      resp.add(r.responsable[i]);
+      form.add(r.formulario[i]);
+    }
+    return {
+      total: rows.length,
+      conDictamen: si + no,
+      sinDictamen: sin,
+      tasa: tasaDe(si, no),
+      aprobados,
+      tasaAprobado: rows.length ? aprobados / rows.length : null,
+      responsables: resp.size,
+      formularios: form.size
+    };
+  }
+
+  function rateBy(rows, dimKey) {
+    const etiquetas = DATA.dims[dimKey];
+    const acc = new Map();
+    for (const i of rows) {
+      const idx = r[dimKey][i];
+      let e = acc.get(idx);
+      if (!e) { e = {idx, label: etiquetas[idx], si: 0, no: 0, sin: 0}; acc.set(idx, e); }
+      if (r.cumple[i] === 1) e.si++;
+      else if (r.cumple[i] === 0) e.no++;
+      else e.sin++;
+    }
+    const salida = [...acc.values()];
+    for (const e of salida) {
+      e.total = e.si + e.no + e.sin;
+      e.tasa = tasaDe(e.si, e.no);
+    }
+    // Los que no tienen dictamen van al final: no son "los peores", son
+    // "los que no se pueden puntuar".
+    salida.sort((a, b) => {
+      if (a.tasa === null && b.tasa === null) return b.total - a.total;
+      if (a.tasa === null) return 1;
+      if (b.tasa === null) return -1;
+      return b.tasa - a.tasa || b.total - a.total;
+    });
+    return salida;
+  }
+
+  function series(rows, periodo) {
+    const etiquetas = DATA.dims[periodo];
+    const presentes = new Set();
+    const si = new Map(), no = new Map(), vol = new Map();
+    for (const i of rows) {
+      const p = r[periodo][i];
+      presentes.add(p);
+      vol.set(p, (vol.get(p) || 0) + 1);
+      if (r.cumple[i] === 1) si.set(p, (si.get(p) || 0) + 1);
+      else if (r.cumple[i] === 0) no.set(p, (no.get(p) || 0) + 1);
+    }
+    // dims.mes y dims.semana vienen ordenados alfabéticamente desde Python,
+    // que para "YYYY-MM" y "YYYY-Www" equivale al orden cronológico.
+    const orden = [...presentes].sort((a, b) => a - b);
+    return {
+      labels: orden.map(p => etiquetas[p]),
+      volumen: orden.map(p => vol.get(p) || 0),
+      tasa: orden.map(p => tasaDe(si.get(p) || 0, no.get(p) || 0))
+    };
+  }
+
+  function heatmap(rows, dimKey, periodo) {
+    const filasPresentes = new Set(), colsPresentes = new Set();
+    const si = new Map(), no = new Map(), tot = new Map();
+    const clave = (f, c) => f + '|' + c;
+    for (const i of rows) {
+      const f = r[dimKey][i], c = r[periodo][i];
+      filasPresentes.add(f); colsPresentes.add(c);
+      const k = clave(f, c);
+      tot.set(k, (tot.get(k) || 0) + 1);
+      if (r.cumple[i] === 1) si.set(k, (si.get(k) || 0) + 1);
+      else if (r.cumple[i] === 0) no.set(k, (no.get(k) || 0) + 1);
+    }
+    const fs = [...filasPresentes].sort((a, b) => a - b);
+    const cs = [...colsPresentes].sort((a, b) => a - b);
+    return {
+      rowLabels: fs.map(f => DATA.dims[dimKey][f]),
+      colLabels: cs.map(c => DATA.dims[periodo][c]),
+      cells: fs.map(f => cs.map(c => {
+        const k = clave(f, c);
+        return {
+          tasa: tasaDe(si.get(k) || 0, no.get(k) || 0),
+          total: tot.get(k) || 0
+        };
+      }))
+    };
+  }
+
+  return {kpis, rateBy, series, heatmap, tasaDe};
+})();
+</script>
 <script id="mod-charts"></script>
 <script id="mod-views"></script>
 <script id="mod-app">
