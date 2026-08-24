@@ -41,6 +41,8 @@ CUMPLE_VALIDOS = {"SI", "NO"}
 METODO_SOPORTADO = "SI_NO_NA"
 FECHA_MINIMA = pd.Timestamp("2020-01-01")
 
+AREA_NULA = "(Sin área específica)"
+
 
 def load(path):
     """Lee las hojas REGISTROS y FORMULARIOS de SupPCI.xlsx."""
@@ -121,3 +123,56 @@ def validate(registros, formularios):
             f"{sorted(sin_mapear)}. Añádelos a SLUG_NAME_MAP con su nombre "
             "correcto y acentuado."
         )
+
+
+def _nombres_actuales(formularios):
+    """Nombre de cada formulario según su versión más alta.
+
+    F031 cambió de nombre entre versiones, de modo que ID_FORMULARIO tiene
+    47 valores distintos pero FORMULARIO tiene 48. La clave es el ID.
+    """
+    ordenado = formularios.sort_values("VERSION_FORMULARIO")
+    ultimo = ordenado.groupby("ID_FORMULARIO").last()
+    return ultimo["NOMBRE_FORMULARIO"].to_dict()
+
+
+def clean(registros, formularios):
+    """Normaliza valores y deriva las columnas que el dashboard agrega."""
+    df = registros.copy()
+
+    df["RESPONSABLE"] = df["RESPONSABLE"].replace(SLUG_NAME_MAP)
+
+    df["AREA_ESPECIFICA_APLICACION"] = (
+        df["AREA_ESPECIFICA_APLICACION"].fillna(AREA_NULA)
+    )
+    df["MOTIVO_NO_CUMPLIMIENTO"] = df["MOTIVO_NO_CUMPLIMIENTO"].fillna("")
+    df["CONCLUSIONES_RECOMENDACIONES"] = (
+        df["CONCLUSIONES_RECOMENDACIONES"].fillna("")
+    )
+    df["NIVEL_RIESGO"] = df["NIVEL_RIESGO"].fillna("(Sin nivel de riesgo)")
+
+    nombres = _nombres_actuales(formularios)
+    df["NOMBRE_FORMULARIO_ACTUAL"] = df["ID_FORMULARIO"].map(nombres)
+    sin_nombre = df["NOMBRE_FORMULARIO_ACTUAL"].isna()
+    if sin_nombre.any():
+        ids = sorted(df.loc[sin_nombre, "ID_FORMULARIO"].unique())
+        raise BuildError(
+            f"Hay registros de formularios ausentes del catálogo: {ids}"
+        )
+
+    fecha = pd.to_datetime(df["FECHA_EVENTO"])
+    df["MES"] = fecha.dt.strftime("%Y-%m")
+    iso = fecha.dt.isocalendar()
+    df["SEMANA"] = (
+        iso["year"].astype(str) + "-W" + iso["week"].astype(str).str.zfill(2)
+    )
+    # Días desde epoch. El cast a datetime64[D] es independiente de la
+    # unidad de la columna: pandas 3 usa datetime64[us], de modo que un
+    # astype("int64") daría microsegundos, no nanosegundos.
+    df["DIA"] = fecha.values.astype("datetime64[D]").astype("int64")
+
+    df["CUMPLE"] = (
+        df["CUMPLE_CORRECTAMENTE"].map({"SI": 1, "NO": 0}).fillna(-1).astype(int)
+    )
+
+    return df
