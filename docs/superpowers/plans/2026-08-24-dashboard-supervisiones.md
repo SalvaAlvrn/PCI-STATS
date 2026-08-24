@@ -1490,6 +1490,22 @@ const charts = (() => {
     vivos.clear();
   }
 
+  /** Destruye los gráficos cuyo canvas cuelga de este contenedor.
+   *
+   * Los conmutadores que repintan una sola tarjeta — mes/semana, ver todas,
+   * ver tabla — no pasan por `views.render()`, así que no llegan a
+   * `destroyAll()`. Sin esto, cada clic dejaría una instancia de Chart.js
+   * viva atada a un canvas ya desprendido del documento.
+   */
+  function destroyIn(contenedor) {
+    for (const g of [...vivos]) {
+      if (contenedor.contains(g.canvas)) {
+        g.destroy();
+        vivos.delete(g);
+      }
+    }
+  }
+
   /** Tooltip HTML propio: el valor manda, el nombre de la serie acompaña. */
   function mostrarTip(x, y, filas) {
     tip.replaceChildren();
@@ -1715,13 +1731,21 @@ const charts = (() => {
 
   /** Tabla ordenable: la vista equivalente que acompaña a cada gráfico.
    *
-   * El estado de ordenación viaja como cuarto argumento en lugar de vivir en
-   * el `<th>`: cada reordenación redibuja la cabecera entera, así que un
-   * `dataset` sobre la celda se destruiría en el acto y el sentido
-   * descendente sería inalcanzable.
+   * El estado viaja como cuarto argumento en lugar de vivir en el `<th>`:
+   * cada reordenación redibuja la cabecera entera, así que un `dataset`
+   * sobre la celda se destruiría en el acto y el sentido descendente sería
+   * inalcanzable.
+   *
+   * `opciones.onFila` recibe la **fila entera**, no su posición. Ordenar
+   * reconstruye el `<tbody>`, de modo que un índice posicional apuntaría al
+   * registro equivocado en cuanto el usuario tocara una cabecera. Quien
+   * llama puede añadir a la fila columnas que no se pintan — `columnas`
+   * decide qué se muestra — y usarlas como identificador.
    */
-  function tabla(contenedor, columnas, filas, orden) {
-    orden = orden || {col: null, asc: true};
+  function tabla(contenedor, columnas, filas, opciones) {
+    opciones = opciones || {};
+    const orden = opciones.orden || {col: null, asc: true};
+    const onFila = opciones.onFila || null;
     contenedor.replaceChildren();
 
     // Se ordena una copia: `filas` pertenece a quien llama, que puede estar
@@ -1751,8 +1775,10 @@ const charts = (() => {
       th.textContent = col.titulo;
       if (orden.col === i) th.textContent += orden.asc ? ' ↑' : ' ↓';
       th.addEventListener('click', () => {
-        tabla(contenedor, columnas, filas,
-              {col: i, asc: orden.col === i ? !orden.asc : true});
+        tabla(contenedor, columnas, filas, {
+          orden: {col: i, asc: orden.col === i ? !orden.asc : true},
+          onFila
+        });
       });
       trh.appendChild(th);
     });
@@ -1769,6 +1795,10 @@ const charts = (() => {
           : (bruto === null || bruto === undefined ? '—' : bruto);
         tr.appendChild(td);
       });
+      if (onFila) {
+        tr.style.cursor = 'pointer';
+        tr.addEventListener('click', () => onFila(fila));
+      }
       tbody.appendChild(tr);
     }
     t.appendChild(tbody);
@@ -1776,7 +1806,8 @@ const charts = (() => {
     contenedor.appendChild(envoltura);
   }
 
-  return {line, bars, columns, heat, tabla, destroyAll, token, pct, num};
+  return {line, bars, columns, heat, tabla, destroyAll, destroyIn,
+          token, pct, num};
 })();
 ```
 
@@ -1853,14 +1884,16 @@ const views = (() => {
   }
 
   function conTabla(tarjeta, columnas, filas, dibujarGrafico) {
-    const zona = document.createElement('div');
-    tarjeta.appendChild(zona);
+    const zona = zonaDe(tarjeta);
     const boton = document.createElement('button');
     boton.className = 'chip';
     boton.type = 'button';
     boton.style.marginTop = '10px';
     let mostrandoTabla = false;
     const pintar = () => {
+      // Este conmutador repinta solo su tarjeta y no pasa por render(),
+      // así que destruye sus propios gráficos o los va acumulando.
+      charts.destroyIn(zona);
       zona.replaceChildren();
       if (mostrandoTabla) charts.tabla(zona, columnas, filas);
       else dibujarGrafico(zona);
@@ -2294,6 +2327,7 @@ function renderResponsable(filas) {
   let periodo = 'mes';
   const zonaVol = document.createElement('div');
   const pintarVol = () => {
+    charts.destroyIn(zonaVol);
     zonaVol.replaceChildren();
     const s = agg.series(suyas, periodo);
     const caja = document.createElement('div');
@@ -2348,6 +2382,7 @@ function renderResponsable(filas) {
       recortado ? `${datos.length} valores; se muestran los ${TOPE_BARRAS} primeros.` : null);
     const zona = document.createElement('div');
     const pintar = () => {
+      charts.destroyIn(zona);
       zona.replaceChildren();
       const vista = datos.slice(0, mostrando);
       const caja = document.createElement('div');
@@ -2385,16 +2420,14 @@ function renderResponsable(filas) {
   // Sus formularios, enlazados a la vista de formulario.
   const porForm = agg.rateBy(suyas, 'formulario');
   const tForm = card('Sus formularios', 'Pulse una fila para ver el detalle del formulario.');
-  const zonaTabla = document.createElement('div');
-  charts.tabla(zonaTabla,
+  // El índice del formulario viaja como cuarta posición de la fila. `columnas`
+  // solo declara tres, así que no se pinta; y al viajar con la fila sobrevive
+  // a que el usuario reordene la tabla, cosa que un índice posicional no hace.
+  charts.tabla(zonaDe(tForm),
     [{titulo: 'Formulario'}, {titulo: 'Supervisiones', num: true},
      {titulo: 'Tasa', num: true, formato: charts.pct}],
-    porForm.map(e => [DATA.forms[e.label].nombre, e.total, e.tasa]));
-  zonaTabla.querySelectorAll('tbody tr').forEach((tr, i) => {
-    tr.style.cursor = 'pointer';
-    tr.addEventListener('click', () => irA('formulario', porForm[i].idx));
-  });
-  tForm.appendChild(zonaTabla);
+    porForm.map(e => [DATA.forms[e.label].nombre, e.total, e.tasa, e.idx]),
+    {onFila: fila => irA('formulario', fila[3])});
   contenedor.appendChild(tForm);
 }
 
