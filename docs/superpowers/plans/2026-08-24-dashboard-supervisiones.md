@@ -1713,9 +1713,33 @@ const charts = (() => {
     contenedor.appendChild(reja);
   }
 
-  /** Tabla ordenable: la vista equivalente que acompaña a cada gráfico. */
-  function tabla(contenedor, columnas, filas) {
+  /** Tabla ordenable: la vista equivalente que acompaña a cada gráfico.
+   *
+   * El estado de ordenación viaja como cuarto argumento en lugar de vivir en
+   * el `<th>`: cada reordenación redibuja la cabecera entera, así que un
+   * `dataset` sobre la celda se destruiría en el acto y el sentido
+   * descendente sería inalcanzable.
+   */
+  function tabla(contenedor, columnas, filas, orden) {
+    orden = orden || {col: null, asc: true};
     contenedor.replaceChildren();
+
+    // Se ordena una copia: `filas` pertenece a quien llama, que puede estar
+    // usando el mismo array para alimentar un gráfico.
+    const visibles = orden.col === null ? filas : filas.slice().sort((a, b) => {
+      const x = a[orden.col], y = b[orden.col];
+      // Los vacíos van al final en los dos sentidos, igual que en
+      // `agg.rateBy`: no son los peores, son los que no se pueden puntuar.
+      const xVacio = x === null || x === undefined;
+      const yVacio = y === null || y === undefined;
+      if (xVacio && yVacio) return 0;
+      if (xVacio) return 1;
+      if (yVacio) return -1;
+      const cmp = typeof x === 'number' && typeof y === 'number'
+        ? x - y : String(x).localeCompare(String(y), 'es');
+      return orden.asc ? cmp : -cmp;
+    });
+
     const envoltura = document.createElement('div');
     envoltura.className = 'scroll-x';
     const t = document.createElement('table');
@@ -1725,28 +1749,24 @@ const charts = (() => {
       const th = document.createElement('th');
       if (col.num) th.className = 'num';
       th.textContent = col.titulo;
+      if (orden.col === i) th.textContent += orden.asc ? ' ↑' : ' ↓';
       th.addEventListener('click', () => {
-        const asc = th.dataset.orden !== 'asc';
-        filas.sort((a, b) => {
-          const x = a[i], y = b[i];
-          const cmp = typeof x === 'number' && typeof y === 'number'
-            ? x - y : String(x).localeCompare(String(y), 'es');
-          return asc ? cmp : -cmp;
-        });
-        th.dataset.orden = asc ? 'asc' : 'desc';
-        tabla(contenedor, columnas, filas);
+        tabla(contenedor, columnas, filas,
+              {col: i, asc: orden.col === i ? !orden.asc : true});
       });
       trh.appendChild(th);
     });
     thead.appendChild(trh);
     t.appendChild(thead);
     const tbody = document.createElement('tbody');
-    for (const fila of filas) {
+    for (const fila of visibles) {
       const tr = document.createElement('tr');
       columnas.forEach((col, i) => {
         const td = document.createElement('td');
         if (col.num) td.className = 'num';
-        td.textContent = col.formato ? col.formato(fila[i]) : fila[i];
+        const bruto = fila[i];
+        td.textContent = col.formato ? col.formato(bruto)
+          : (bruto === null || bruto === undefined ? '—' : bruto);
         tr.appendChild(td);
       });
       tbody.appendChild(tr);
