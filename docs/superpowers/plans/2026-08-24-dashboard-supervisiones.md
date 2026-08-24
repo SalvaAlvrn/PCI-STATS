@@ -797,8 +797,16 @@ def test_render_html_produce_un_archivo_sin_urls_externas(tmp_path):
     assert "/*__DATA__*/" not in html
     assert "/*__CHARTJS__*/" not in html
     assert "Chart" in html
-    assert "https://" not in html
-    assert "http://" not in html
+    # "Funciona sin conexión" quiere decir que nada se descarga al abrir el
+    # archivo, no que la cadena "https" no aparezca en ninguna parte. Una URL
+    # dentro de un comentario — el aviso de licencia MIT de Chart.js, por
+    # ejemplo — no provoca ninguna petición, y borrarla para satisfacer un
+    # assert incumpliría esa licencia. Se comprueban las construcciones que
+    # sí provocan una descarga.
+    for atributo in ('src="http', "src='http", 'href="http', "href='http"):
+        assert atributo not in html, atributo
+    assert "url(http" not in html
+    assert "@import" not in html
 
 
 def test_render_html_embebe_los_datos_reales(tmp_path):
@@ -1049,7 +1057,7 @@ python -m pytest tests/test_build.py -v
 python build_dashboard.py
 ```
 
-Expected: 26 pruebas PASS. El build imprime el resumen y escribe `dashboard.html`. Comprobar que el tamaño está en el rango previsto (1.0–1.4 MB con Chart.js incluido).
+Expected: 26 pruebas PASS. El build imprime el resumen y escribe `dashboard.html`. El tamaño medido es de unos 583 KB: 369 KB de datos más 205 KB de Chart.js. Un valor muy por encima de 1 MB indicaría que `texts.conclusiones` creció más de lo previsto.
 
 - [ ] **Step 7: Abrir el archivo y mirarlo**
 
@@ -2670,7 +2678,7 @@ ls -lh dashboard.html
 
 Expected: 26 pruebas PASS. El build imprime el resumen completo. Abrir `tests/test_agg.html` y confirmar `26 pasan, 0 fallan`.
 
-Registrar el tamaño real del archivo. Si supera 2 MB, revisar si `texts.conclusiones` creció; el spec estimó 1.0–1.4 MB.
+Registrar el tamaño real del archivo. El medido tras la Task 5 fue de 583 KB; si supera 2 MB, revisar si `texts.conclusiones` creció.
 
 - [ ] **Step 5: Escribir el README**
 

@@ -218,6 +218,10 @@ de detalle.
 cumplieron, que es donde se consulta. Peso estimado del archivo final,
 incluyendo Chart.js inline: 1.0–1.4 MB.
 
+Medido tras implementar: 583 KB, de los cuales 369 KB son el JSON de datos y
+205 KB Chart.js. La estimación era conservadora — la codificación por
+diccionario comprime más de lo previsto.
+
 ## 6. Estructura del código
 
 ### 6.1 `build_dashboard.py`
