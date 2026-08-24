@@ -736,11 +736,17 @@ const views = (() => {
         const lienzo = document.createElement('canvas');
         caja.appendChild(lienzo);
         zona.appendChild(caja);
-        charts.bars(lienzo, {
+        const grafico = charts.bars(lienzo, {
           labels: porResp.map(e => `${e.label} (${e.total})`),
           values: porResp.map(e => e.tasa),
           extra: porResp.map(e => `${e.si} de ${e.si + e.no} con dictamen`),
           formato: charts.pct
+        });
+        lienzo.style.cursor = 'pointer';
+        lienzo.addEventListener('click', ev => {
+          const puntos = grafico.getElementsAtEventForMode(
+            ev, 'index', {intersect: false}, false);
+          if (puntos.length) views.irA('responsable', porResp[puntos[0].index].idx);
         });
       });
     contenedor.appendChild(tarjetaResp);
@@ -785,14 +791,200 @@ const views = (() => {
       zona => charts.heat(zona, calor));
     contenedor.appendChild(tCalor);
   }
-  function renderResponsable(filas) {
-    contenedor.appendChild(vacio('Vista responsable — pendiente (Task 11)'));
+  const DIMENSIONES_DESGLOSE = [
+    ['medida', 'Medida'],
+    ['submedida', 'Submedida'],
+    ['unidad', 'Unidad / servicio'],
+    ['area', 'Área específica'],
+    ['grupo', 'Grupo ocupacional'],
+    ['cargo', 'Cargo']
+  ];
+  const TOPE_BARRAS = 15;
+
+  function selectorResponsable() {
+    const label = document.createElement('label');
+    label.style.cssText = 'display:flex;flex-direction:column;font-size:12px;gap:3px';
+    label.textContent = 'Responsable';
+    const sel = document.createElement('select');
+    sel.style.cssText = 'font:inherit;font-size:14px;padding:6px 9px;border-radius:7px;' +
+      'border:1px solid var(--border);background:var(--surface);color:var(--text-primary)';
+    DATA.dims.responsable.forEach((nombre, i) => {
+      const op = document.createElement('option');
+      op.value = String(i);
+      op.textContent = nombre;
+      if (i === estado.responsable) op.selected = true;
+      sel.appendChild(op);
+    });
+    sel.addEventListener('change', () => {
+      estado.responsable = Number(sel.value);
+      render();
+    });
+    label.appendChild(sel);
+    return label;
   }
+
+  function renderResponsable(filas) {
+    if (estado.responsable === null) estado.responsable = 0;
+    const suyas = filas.filter(i => DATA.rows.responsable[i] === estado.responsable);
+
+    const cabecera = document.createElement('div');
+    cabecera.style.cssText = 'display:flex;gap:16px;align-items:flex-end;margin-bottom:16px';
+    cabecera.appendChild(selectorResponsable());
+    contenedor.appendChild(cabecera);
+
+    if (!suyas.length) {
+      contenedor.appendChild(
+        vacio('Este responsable no tiene registros para estos filtros.'));
+      return;
+    }
+
+    const k = agg.kpis(suyas);
+    const global = agg.kpis(filas);
+    const delta = (a, b) => {
+      if (a === null || b === null) return '';
+      const d = (a - b) * 100;
+      const signo = d >= 0 ? '+' : '−';
+      return `${signo}${Math.abs(d).toFixed(1)} pts vs. el conjunto filtrado`;
+    };
+
+    const fila = document.createElement('div');
+    fila.className = 'kpis';
+    fila.style.marginBottom = '16px';
+    fila.append(
+      kpi('Supervisiones', charts.num(k.total),
+          `${(k.total / global.total * 100).toFixed(1)}% del total filtrado`),
+      kpi('Tasa de cumplimiento', charts.pct(k.tasa), delta(k.tasa, global.tasa)),
+      kpi('Sin dictamen', charts.num(k.sinDictamen)),
+      kpi('Formularios distintos', charts.num(k.formularios)),
+      kpi('Aprobados', charts.pct(k.tasaAprobado), delta(k.tasaAprobado, global.tasaAprobado))
+    );
+    contenedor.appendChild(fila);
+
+    // Volumen, con conmutador mes / semana.
+    const tVol = card('Formularios realizados', null);
+    const conmutador = document.createElement('div');
+    conmutador.style.margin = '8px 0';
+    let periodo = 'mes';
+    const zonaVol = document.createElement('div');
+    const pintarVol = () => {
+      zonaVol.replaceChildren();
+      const s = agg.series(suyas, periodo);
+      const caja = document.createElement('div');
+      caja.className = 'plot';
+      const lienzo = document.createElement('canvas');
+      caja.appendChild(lienzo);
+      zonaVol.appendChild(caja);
+      charts.columns(lienzo, {labels: s.labels, values: s.volumen, formato: charts.num});
+    };
+    [['mes', 'Por mes'], ['semana', 'Por semana']].forEach(([valor, texto]) => {
+      const b = document.createElement('button');
+      b.className = 'chip';
+      b.type = 'button';
+      b.textContent = texto;
+      b.addEventListener('click', () => { periodo = valor; pintarVol(); });
+      conmutador.appendChild(b);
+    });
+    tVol.append(conmutador, zonaVol);
+    pintarVol();
+    contenedor.appendChild(tVol);
+
+    // Evolución con emphasis: la persona en color, el conjunto en gris.
+    const suya = agg.series(suyas, 'mes');
+    const todaGlobal = agg.series(filas, 'mes');
+    const mapaGlobal = new Map(todaGlobal.labels.map((l, i) => [l, todaGlobal.tasa[i]]));
+    const tEvo = card('Evolución de su cumplimiento',
+                      'La línea gris es el conjunto filtrado completo, como referencia.');
+    conTabla(tEvo,
+      [{titulo: 'Mes'}, {titulo: 'Su tasa', num: true, formato: charts.pct},
+       {titulo: 'Conjunto', num: true, formato: charts.pct}],
+      suya.labels.map((l, i) => [l, suya.tasa[i], mapaGlobal.get(l) ?? null]),
+      zona => charts.line(plot(zona, 'r-evo'), {
+        labels: suya.labels,
+        series: [
+          {label: 'Conjunto filtrado',
+           data: suya.labels.map(l => mapaGlobal.get(l) ?? null),
+           color: charts.token('context')},
+          {label: DATA.dims.responsable[estado.responsable],
+           data: suya.tasa, color: charts.token('series-1')}
+        ]
+      }));
+    contenedor.appendChild(tEvo);
+
+    // Desglose en las seis dimensiones.
+    const rejilla = document.createElement('div');
+    rejilla.className = 'grid-2';
+    for (const [clave, titulo] of DIMENSIONES_DESGLOSE) {
+      const datos = agg.rateBy(suyas, clave);
+      const recortado = datos.length > TOPE_BARRAS;
+      let mostrando = recortado ? TOPE_BARRAS : datos.length;
+      const tarjeta = card(titulo,
+        recortado ? `${datos.length} valores; se muestran los ${TOPE_BARRAS} primeros.` : null);
+      const zona = document.createElement('div');
+      const pintar = () => {
+        zona.replaceChildren();
+        const vista = datos.slice(0, mostrando);
+        const caja = document.createElement('div');
+        caja.className = 'plot';
+        caja.style.height = Math.max(140, vista.length * 24 + 40) + 'px';
+        const lienzo = document.createElement('canvas');
+        caja.appendChild(lienzo);
+        zona.appendChild(caja);
+        charts.bars(lienzo, {
+          labels: vista.map(e => `${e.label} (${e.total})`),
+          values: vista.map(e => e.tasa),
+          extra: vista.map(e => `${e.si} de ${e.si + e.no} con dictamen`),
+          formato: charts.pct
+        });
+      };
+      tarjeta.appendChild(zona);
+      if (recortado) {
+        const ver = document.createElement('button');
+        ver.className = 'chip';
+        ver.type = 'button';
+        ver.style.marginTop = '8px';
+        ver.textContent = 'Ver todas';
+        ver.addEventListener('click', () => {
+          mostrando = mostrando === datos.length ? TOPE_BARRAS : datos.length;
+          ver.textContent = mostrando === datos.length ? 'Ver menos' : 'Ver todas';
+          pintar();
+        });
+        tarjeta.appendChild(ver);
+      }
+      pintar();
+      rejilla.appendChild(tarjeta);
+    }
+    contenedor.appendChild(rejilla);
+
+    // Sus formularios, enlazados a la vista de formulario.
+    const porForm = agg.rateBy(suyas, 'formulario');
+    const tForm = card('Sus formularios', 'Pulse una fila para ver el detalle del formulario.');
+    const zonaTabla = document.createElement('div');
+    charts.tabla(zonaTabla,
+      [{titulo: 'Formulario'}, {titulo: 'Supervisiones', num: true},
+       {titulo: 'Tasa', num: true, formato: charts.pct}],
+      porForm.map(e => [DATA.forms[e.label].nombre, e.total, e.tasa]));
+    zonaTabla.querySelectorAll('tbody tr').forEach((tr, i) => {
+      tr.style.cursor = 'pointer';
+      tr.addEventListener('click', () => irA('formulario', porForm[i].idx));
+    });
+    tForm.appendChild(zonaTabla);
+    contenedor.appendChild(tForm);
+  }
+
+  function irA(vista, clave) {
+    estado.vista = vista;
+    if (vista === 'responsable') estado.responsable = clave;
+    if (vista === 'formulario') estado.formulario = clave;
+    document.querySelectorAll('.tabs button').forEach(b =>
+      b.setAttribute('aria-selected', String(b.dataset.view === vista)));
+    render();
+  }
+
   function renderFormulario(filas) {
     contenedor.appendChild(vacio('Vista formulario — pendiente (Task 12)'));
   }
 
-  return {estado, render, card, conTabla, zonaDe, plot, vacio, kpi};
+  return {estado, render, card, conTabla, zonaDe, plot, vacio, kpi, irA};
 })();
 </script>
 <script id="mod-app">
