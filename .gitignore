@@ -1,0 +1,5 @@
+dashboard.html
+__pycache__/
+.pytest_cache/
+vendor/*.js
+.idea/
