@@ -176,3 +176,80 @@ def clean(registros, formularios):
     )
 
     return df
+
+
+# columna del DataFrame limpio -> clave de dimensión en DATA
+DIMENSIONES = {
+    "RESPONSABLE": "responsable",
+    "ID_FORMULARIO": "formulario",
+    "MEDIDA": "medida",
+    "SUBMEDIDA": "submedida",
+    "UNIDAD_SERVICIO_APLICACION": "unidad",
+    "AREA_ESPECIFICA_APLICACION": "area",
+    "GRUPO_OCUPACIONAL": "grupo",
+    "CARGO": "cargo",
+    "ESTADO_VALIDACION": "estado",
+    "NIVEL_RIESGO": "riesgo",
+    "MOTIVO_NO_CUMPLIMIENTO": "motivo",
+    "MES": "mes",
+    "SEMANA": "semana",
+}
+
+
+def encode(df):
+    """Codifica el DataFrame limpio en diccionarios + columnas paralelas."""
+    dims = {}
+    rows = {}
+    for columna, clave in DIMENSIONES.items():
+        categoria = df[columna].astype("category")
+        # Orden alfabético para que el archivo sea determinista entre builds.
+        categoria = categoria.cat.reorder_categories(
+            sorted(categoria.cat.categories)
+        )
+        dims[clave] = list(categoria.cat.categories)
+        rows[clave] = [int(c) for c in categoria.cat.codes]
+
+    rows["dia"] = [int(v) for v in df["DIA"]]
+    rows["cumple"] = [int(v) for v in df["CUMPLE"]]
+    rows["pct"] = [int(v) for v in df["PORCENTAJE_CUMPLIMIENTO"]]
+    rows["si"] = [int(v) for v in df["TOTAL_SI"]]
+    rows["no"] = [int(v) for v in df["TOTAL_NO"]]
+    rows["na"] = [int(v) for v in df["TOTAL_NA"]]
+
+    forms = {}
+    for id_form, grupo in df.groupby("ID_FORMULARIO"):
+        ultima = grupo.sort_values("VERSION_FORMULARIO").iloc[-1]
+        forms[id_form] = {
+            "nombre": ultima["NOMBRE_FORMULARIO_ACTUAL"],
+            "version": int(ultima["VERSION_FORMULARIO"]),
+            "medida": ultima["MEDIDA"],
+            "submedida": ultima["SUBMEDIDA"],
+        }
+
+    # Las conclusiones solo se consultan sobre lo que falló; embeberlas todas
+    # duplicaría el peso del archivo sin que nadie las lea.
+    conclusiones = {
+        str(i): texto
+        for i, (cumple, texto) in enumerate(
+            zip(df["CUMPLE"], df["CONCLUSIONES_RECOMENDACIONES"])
+        )
+        if cumple == 0 and texto
+    }
+
+    return {
+        "dims": dims,
+        "forms": forms,
+        "rows": rows,
+        # NOMBRE_EVALUADO tiene 2012 valores distintos sobre 2806 filas: el
+        # diccionario no comprimiría nada. No es dimensión de agregación.
+        "texts": {
+            "evaluado": [str(v) for v in df["NOMBRE_EVALUADO"]],
+            "conclusiones": conclusiones,
+        },
+        "meta": {
+            "generado": pd.Timestamp.now().strftime("%Y-%m-%d %H:%M"),
+            "filas": len(df),
+            "dia_min": int(df["DIA"].min()),
+            "dia_max": int(df["DIA"].max()),
+        },
+    }

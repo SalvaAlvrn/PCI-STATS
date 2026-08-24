@@ -3,7 +3,7 @@ from pathlib import Path
 import pandas as pd
 import pytest
 
-from build_dashboard import AREA_NULA, BuildError, clean, load, validate
+from build_dashboard import AREA_NULA, BuildError, clean, encode, load, validate
 
 XLSX = Path(__file__).resolve().parent.parent / "SupPCI.xlsx"
 
@@ -111,3 +111,95 @@ def test_clean_sobre_el_excel_real_conserva_todas_las_filas():
     assert limpio["ID_FORMULARIO"].nunique() == 47
     assert limpio["NOMBRE_FORMULARIO_ACTUAL"].nunique() == 47
     assert limpio["AREA_ESPECIFICA_APLICACION"].isna().sum() == 0
+
+
+def _tasa(serie):
+    """Tasa de cumplimiento sobre los registros con dictamen."""
+    con_dictamen = serie[serie.isin(["SI", "NO"])]
+    return (con_dictamen == "SI").sum() / len(con_dictamen)
+
+
+def test_encode_construye_dimensiones_y_filas(registros_ok, formularios_ok):
+    data = encode(clean(registros_ok, formularios_ok))
+    assert data["dims"]["responsable"] == [
+        "Ana Pérez",
+        "Ana María Pérez Gómez",
+    ]
+    assert len(data["rows"]["cumple"]) == 4
+    assert data["rows"]["cumple"] == [1, 0, 1, -1]
+    assert data["dims"]["mes"] == ["2026-07", "2026-08"]
+
+
+def test_encode_es_reversible(registros_ok, formularios_ok):
+    limpio = clean(registros_ok, formularios_ok)
+    data = encode(limpio)
+    decodificado = [
+        data["dims"]["responsable"][i] for i in data["rows"]["responsable"]
+    ]
+    assert decodificado == list(limpio["RESPONSABLE"])
+    decodificado_area = [data["dims"]["area"][i] for i in data["rows"]["area"]]
+    assert decodificado_area == list(limpio["AREA_ESPECIFICA_APLICACION"])
+
+
+def test_encode_guarda_metadatos_de_formulario(registros_ok, formularios_ok):
+    data = encode(clean(registros_ok, formularios_ok))
+    assert data["forms"]["F002"]["nombre"] == "Guantes"
+    assert data["forms"]["F002"]["medida"] == "Medidas estándar"
+
+
+def test_encode_solo_embebe_conclusiones_de_los_que_no_cumplen(
+    registros_ok, formularios_ok
+):
+    data = encode(clean(registros_ok, formularios_ok))
+    assert list(data["texts"]["conclusiones"]) == ["1"]
+    assert data["texts"]["conclusiones"]["1"] == "Reponer jabón"
+
+
+def test_encode_deja_evaluado_como_texto_plano(registros_ok, formularios_ok):
+    data = encode(clean(registros_ok, formularios_ok))
+    assert data["texts"]["evaluado"] == ["Juan", "Luis", "Marta", "Rosa"]
+    assert "evaluado" not in data["dims"]
+
+
+def test_cifra_de_control_tasa_global():
+    registros, formularios = load(XLSX)
+    data = encode(clean(registros, formularios))
+    cumple = data["rows"]["cumple"]
+    con_dictamen = [c for c in cumple if c >= 0]
+    del_pipeline = sum(con_dictamen) / len(con_dictamen)
+    de_pandas = _tasa(registros["CUMPLE_CORRECTAMENTE"])
+    assert del_pipeline == pytest.approx(de_pandas)
+
+
+def test_cifra_de_control_tasa_por_responsable():
+    registros, formularios = load(XLSX)
+    limpio = clean(registros, formularios)
+    data = encode(limpio)
+    dims = data["dims"]["responsable"]
+    filas = data["rows"]
+    for indice, nombre in enumerate(dims):
+        cumple = [
+            c
+            for fila, c in enumerate(filas["cumple"])
+            if filas["responsable"][fila] == indice and c >= 0
+        ]
+        esperado = _tasa(
+            limpio.loc[limpio["RESPONSABLE"] == nombre, "CUMPLE_CORRECTAMENTE"]
+        )
+        assert sum(cumple) / len(cumple) == pytest.approx(esperado), nombre
+
+
+def test_cifra_de_control_tasa_por_mes():
+    registros, formularios = load(XLSX)
+    limpio = clean(registros, formularios)
+    data = encode(limpio)
+    dims = data["dims"]["mes"]
+    filas = data["rows"]
+    for indice, mes in enumerate(dims):
+        cumple = [
+            c
+            for fila, c in enumerate(filas["cumple"])
+            if filas["mes"][fila] == indice and c >= 0
+        ]
+        esperado = _tasa(limpio.loc[limpio["MES"] == mes, "CUMPLE_CORRECTAMENTE"])
+        assert sum(cumple) / len(cumple) == pytest.approx(esperado), mes
