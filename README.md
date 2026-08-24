@@ -69,8 +69,10 @@ equivocadas. Motivos posibles:
   acentos).
 - Falta `vendor/chart.umd.min.js` — ver la sección Uso arriba.
 
-Los nombres en formato slug se corrigen añadiéndolos a `SLUG_NAME_MAP` en
-`build_dashboard.py`, con su acentuación correcta.
+Los nombres en formato slug se corrigen añadiéndolos a `nombres.json`, con su
+acentuación correcta. Ese archivo no está versionado porque contiene nombres
+reales; copia `nombres.json.ejemplo` para ver su formato. En CI lo escribe el
+workflow desde el secret `NOMBRES_JSON`.
 
 ## Diseño
 

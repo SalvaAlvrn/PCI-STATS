@@ -45,6 +45,15 @@ def registros_ok():
 
 
 @pytest.fixture
+def nombres_ok():
+    """Mapa de normalización con nombres ficticios."""
+    return {
+        "ana_mar_a_p_rez_g_mez": "Ana María Pérez Gómez",
+        "luis_fernando_l_pez_d_az": "Luis Fernando López Díaz",
+    }
+
+
+@pytest.fixture
 def formularios_ok():
     """F001 con una versión; F002 con dos y cambio de nombre entre ellas."""
     return pd.DataFrame(

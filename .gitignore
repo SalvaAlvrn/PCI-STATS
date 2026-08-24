@@ -1,5 +1,6 @@
 dashboard.html
 SupPCI.xlsx
+nombres.json
 __pycache__/
 .pytest_cache/
 vendor/*.js

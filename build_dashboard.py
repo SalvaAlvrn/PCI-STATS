@@ -30,14 +30,38 @@ COLUMNAS_FORMULARIOS = [
     "NOMBRE_FORMULARIO", "METODO_CUMPLIMIENTO",
 ]
 
-# Dos responsables quedaron con el nombre en formato slug tras la migración.
-# El mapa es explícito a propósito: des-sluguificar automáticamente no puede
-# recuperar la acentuación y un error silencioso crearía un responsable
+RUTA_NOMBRES = Path(__file__).resolve().parent / "nombres.json"
+
+# El mapa de normalización de nombres vive fuera del código: contiene nombres
+# de personas reales y el repositorio es público. En CI llega desde un secret.
+# Sigue siendo explícito a propósito: des-sluguificar automáticamente no puede
+# recuperar la acentuación, y un error silencioso crearía un responsable
 # fantasma que partiría sus estadísticas en dos.
-SLUG_NAME_MAP = {
-    "ana_mar_a_p_rez_g_mez": "Ana María Pérez Gómez",
-    "luis_fernando_l_pez_d_az": "Luis Fernando López Díaz",
-}
+
+
+def cargar_nombres(ruta=RUTA_NOMBRES):
+    """Lee el mapa de normalización de nombres de responsables."""
+    ruta = Path(ruta)
+    if not ruta.exists():
+        raise BuildError(
+            f"No existe {ruta}. Es el mapa que corrige los nombres que la "
+            "migración dejó en formato slug. Copia nombres.json.ejemplo a "
+            "nombres.json y pon los nombres reales. En CI lo escribe el "
+            "workflow desde el secret NOMBRES_JSON."
+        )
+    try:
+        mapa = json.loads(ruta.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as error:
+        raise BuildError(f"{ruta} no es un JSON válido: {error}")
+    if not isinstance(mapa, dict) or not all(
+        isinstance(k, str) and isinstance(v, str) for k, v in mapa.items()
+    ):
+        raise BuildError(
+            f"{ruta} debe ser un objeto cuyas claves y valores sean todos "
+            "cadenas de texto"
+        )
+    return mapa
+
 
 CUMPLE_VALIDOS = {"SI", "NO"}
 ESTADOS_VALIDOS = {"Aprobado", "En espera"}
@@ -84,7 +108,7 @@ def _columnas_faltantes(df, esperadas, hoja):
         raise BuildError(f"Faltan columnas en la hoja {hoja}: {faltan}")
 
 
-def validate(registros, formularios):
+def validate(registros, formularios, nombres):
     """Aborta el build si el Excel no tiene la forma que el dashboard asume."""
     _columnas_faltantes(registros, COLUMNAS_REGISTROS, "REGISTROS")
     _columnas_faltantes(formularios, COLUMNAS_FORMULARIOS, "FORMULARIOS")
@@ -156,11 +180,11 @@ def validate(registros, formularios):
         for nombre in registros["RESPONSABLE"].dropna().unique()
         if "_" in nombre and nombre == nombre.lower()
     }
-    sin_mapear = slugs - set(SLUG_NAME_MAP)
+    sin_mapear = slugs - set(nombres)
     if sin_mapear:
         raise BuildError(
             f"Responsables con nombre en formato slug sin mapear: "
-            f"{sorted(sin_mapear)}. Añádelos a SLUG_NAME_MAP con su nombre "
+            f"{sorted(sin_mapear)}. Añádelos a nombres.json con su nombre "
             "correcto y acentuado."
         )
 
@@ -185,11 +209,11 @@ def _nombres_actuales(formularios):
     return _filas_actuales(formularios)["NOMBRE_FORMULARIO"].to_dict()
 
 
-def clean(registros, formularios):
+def clean(registros, formularios, nombres):
     """Normaliza valores y deriva las columnas que el dashboard agrega."""
     df = registros.copy()
 
-    df["RESPONSABLE"] = df["RESPONSABLE"].replace(SLUG_NAME_MAP)
+    df["RESPONSABLE"] = df["RESPONSABLE"].replace(nombres)
 
     df["AREA_ESPECIFICA_APLICACION"] = (
         df["AREA_ESPECIFICA_APLICACION"].fillna(AREA_NULA)
@@ -349,12 +373,12 @@ def main(argv=None):
     registros, formularios = load(origen)
     print(f"Leídas {len(registros)} filas de REGISTROS")
 
-    validate(registros, formularios)
-
-    limpio = clean(registros, formularios)
-    slugs = sum(registros["RESPONSABLE"].isin(SLUG_NAME_MAP))
+    nombres = cargar_nombres()
+    validate(registros, formularios, nombres)
+    limpio = clean(registros, formularios, nombres)
+    normalizados = int(registros["RESPONSABLE"].isin(nombres).sum())
     areas = int(registros["AREA_ESPECIFICA_APLICACION"].isna().sum())
-    print(f"Nombres normalizados: {slugs}")
+    print(f"Nombres normalizados: {normalizados}")
     print(f"Áreas nulas rellenadas como «{AREA_NULA}»: {areas}")
 
     data = encode(limpio, formularios)
