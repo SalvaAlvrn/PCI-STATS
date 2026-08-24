@@ -700,7 +700,90 @@ const views = (() => {
   // renderGlobal, renderResponsable y renderFormulario se añaden en las
   // tasks 10, 11 y 12. Hasta entonces son marcadores visibles.
   function renderGlobal(filas) {
-    contenedor.appendChild(vacio('Vista global — pendiente (Task 10)'));
+    const k = agg.kpis(filas);
+
+    const fila = document.createElement('div');
+    fila.className = 'kpis';
+    fila.style.marginBottom = '16px';
+    fila.append(
+      kpi('Supervisiones', charts.num(k.total)),
+      kpi('Tasa de cumplimiento', charts.pct(k.tasa),
+          `${charts.num(k.conDictamen)} con dictamen · ${charts.num(k.sinDictamen)} sin dictamen`),
+      kpi('Responsables activos', charts.num(k.responsables)),
+      kpi('Formularios usados', charts.num(k.formularios)),
+      kpi('Aprobados', charts.pct(k.tasaAprobado), charts.num(k.aprobados) + ' registros')
+    );
+    contenedor.appendChild(fila);
+
+    // Ranking de responsables. Categorías nominales: un solo color para todas
+    // las barras. La longitud ya codifica la magnitud; teñirlas por rango
+    // duplicaría la codificación y quemaría el canal de color.
+    const porResp = agg.rateBy(filas, 'responsable');
+    const tarjetaResp = card(
+      'Cumplimiento por responsable',
+      'Ordenado por tasa. El número entre paréntesis es el volumen de supervisiones.');
+    conTabla(
+      tarjetaResp,
+      [{titulo: 'Responsable'}, {titulo: 'Supervisiones', num: true},
+       {titulo: 'Cumplen', num: true}, {titulo: 'No cumplen', num: true},
+       {titulo: 'Sin dictamen', num: true},
+       {titulo: 'Tasa', num: true, formato: charts.pct}],
+      porResp.map(e => [e.label, e.total, e.si, e.no, e.sin, e.tasa]),
+      zona => {
+        const caja = document.createElement('div');
+        caja.className = 'plot';
+        caja.style.height = Math.max(200, porResp.length * 26 + 40) + 'px';
+        const lienzo = document.createElement('canvas');
+        caja.appendChild(lienzo);
+        zona.appendChild(caja);
+        charts.bars(lienzo, {
+          labels: porResp.map(e => `${e.label} (${e.total})`),
+          values: porResp.map(e => e.tasa),
+          extra: porResp.map(e => `${e.si} de ${e.si + e.no} con dictamen`),
+          formato: charts.pct
+        });
+      });
+    contenedor.appendChild(tarjetaResp);
+
+    // Evolución: dos plots apilados sobre el mismo eje X. Nunca un eje Y
+    // secundario — ver Global Constraints.
+    const s = agg.series(filas, 'mes');
+    const rejilla = document.createElement('div');
+    rejilla.className = 'grid-2';
+
+    const tTasa = card('Tasa de cumplimiento por mes', null);
+    conTabla(tTasa,
+      [{titulo: 'Mes'}, {titulo: 'Tasa', num: true, formato: charts.pct}],
+      s.labels.map((l, i) => [l, s.tasa[i]]),
+      zona => charts.line(plot(zona, 'g-tasa'), {
+        labels: s.labels,
+        series: [{label: 'Tasa de cumplimiento', data: s.tasa,
+                  color: charts.token('series-1')}]
+      }));
+
+    const tVol = card('Supervisiones por mes', null);
+    conTabla(tVol,
+      [{titulo: 'Mes'}, {titulo: 'Supervisiones', num: true}],
+      s.labels.map((l, i) => [l, s.volumen[i]]),
+      zona => charts.columns(plot(zona, 'g-vol'), {
+        labels: s.labels, values: s.volumen, formato: charts.num
+      }));
+
+    rejilla.append(tTasa, tVol);
+    contenedor.appendChild(rejilla);
+
+    // Mapa de calor: magnitud continua, rampa secuencial de un solo tono.
+    const calor = agg.heatmap(filas, 'submedida', 'mes');
+    const tCalor = card('Cumplimiento por submedida y mes',
+                        'Porcentaje de cumplimiento. Un punto marca que no hubo registros con dictamen.');
+    conTabla(tCalor,
+      [{titulo: 'Submedida'}, {titulo: 'Mes'},
+       {titulo: 'Tasa', num: true, formato: charts.pct},
+       {titulo: 'Supervisiones', num: true}],
+      calor.rowLabels.flatMap((f, i) =>
+        calor.colLabels.map((c, j) => [f, c, calor.cells[i][j].tasa, calor.cells[i][j].total])),
+      zona => charts.heat(zona, calor));
+    contenedor.appendChild(tCalor);
   }
   function renderResponsable(filas) {
     contenedor.appendChild(vacio('Vista responsable — pendiente (Task 11)'));
