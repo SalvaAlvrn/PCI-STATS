@@ -1,0 +1,161 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Supervisiones PCI</title>
+<style>
+:root {
+  color-scheme: light;
+  --plane:          #f9f9f7;
+  --surface:        #fcfcfb;
+  --text-primary:   #0b0b0b;
+  --text-secondary: #52514e;
+  --text-muted:     #898781;
+  --grid:           #e1e0d9;
+  --axis:           #c3c2b7;
+  --border:         rgba(11,11,11,0.10);
+  --series-1:       #2a78d6;
+  --series-2:       #eb6834;
+  --context:        #c3c2b7;
+  --good:           #0ca30c;
+  --critical:       #d03b3b;
+  --warning:        #fab219;
+  --serious:        #ec835a;
+  --seq-100: #cde2fb; --seq-250: #86b6ef; --seq-400: #3987e5;
+  --seq-550: #1c5cab; --seq-700: #0d366b;
+  --sans: system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --plane: #0d0d0d; --surface: #1a1a19;
+    --text-primary: #ffffff; --text-secondary: #c3c2b7; --text-muted: #898781;
+    --grid: #2c2c2a; --axis: #383835; --border: rgba(255,255,255,0.10);
+    --series-1: #3987e5; --series-2: #d95926; --context: #52514e;
+  }
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --plane: #0d0d0d; --surface: #1a1a19;
+  --text-primary: #ffffff; --text-secondary: #c3c2b7; --text-muted: #898781;
+  --grid: #2c2c2a; --axis: #383835; --border: rgba(255,255,255,0.10);
+  --series-1: #3987e5; --series-2: #d95926; --context: #52514e;
+}
+
+* { box-sizing: border-box; }
+body {
+  margin: 0; background: var(--plane); color: var(--text-primary);
+  font-family: var(--sans); font-size: 14px; line-height: 1.5;
+}
+.wrap { max-width: 1200px; margin: 0 auto; padding: 24px 20px 64px; }
+h1 { font-size: 20px; font-weight: 600; margin: 0; }
+h2 { font-size: 15px; font-weight: 600; margin: 0 0 4px; }
+.sub { color: var(--text-secondary); font-size: 13px; }
+
+.card {
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: 10px; padding: 16px 18px; margin-bottom: 16px;
+}
+.grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+@media (max-width: 860px) { .grid-2 { grid-template-columns: 1fr; } }
+
+/* El contenedor crece con su contenido: fijar la altura recortaría la
+   banda del eje X y crearía un scroll anidado dentro del card. */
+.plot { position: relative; height: 260px; }
+
+.kpis { display: flex; flex-wrap: wrap; gap: 12px; }
+.kpi {
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: 10px; padding: 12px 16px; min-width: 150px; flex: 1;
+}
+.kpi .label { color: var(--text-secondary); font-size: 12px; }
+.kpi .value { font-size: 26px; font-weight: 600; margin-top: 2px; }
+.kpi .delta { font-size: 12px; color: var(--text-secondary); }
+.hero { font-size: 48px; font-weight: 600; line-height: 1.1; }
+
+table { border-collapse: collapse; width: 100%; font-size: 13px; }
+th, td { text-align: left; padding: 7px 10px; border-bottom: 1px solid var(--grid); }
+th { color: var(--text-secondary); font-weight: 600; cursor: pointer; }
+td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+.scroll-x { overflow-x: auto; }
+
+.tabs { display: flex; gap: 4px; margin-bottom: 16px; }
+.tabs button {
+  font: inherit; padding: 7px 14px; border-radius: 8px; cursor: pointer;
+  border: 1px solid var(--border); background: transparent; color: var(--text-secondary);
+}
+.tabs button[aria-selected="true"] {
+  background: var(--surface); color: var(--text-primary); font-weight: 600;
+}
+
+.filters { display: flex; flex-wrap: wrap; gap: 8px; align-items: flex-end; margin-bottom: 12px; }
+.filters label { display: flex; flex-direction: column; font-size: 12px; color: var(--text-secondary); gap: 3px; }
+.filters select, .filters input {
+  font: inherit; font-size: 13px; padding: 5px 8px; border-radius: 7px;
+  border: 1px solid var(--border); background: var(--surface); color: var(--text-primary);
+}
+.chips { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 16px; }
+.chip {
+  font-size: 12px; padding: 3px 8px; border-radius: 999px;
+  border: 1px solid var(--border); background: var(--surface); cursor: pointer;
+}
+.empty { color: var(--text-secondary); padding: 28px 0; text-align: center; }
+
+/* Mapa de calor: CSS Grid en lugar de un plugin de Chart.js. Menos código,
+   control total del gap de 2px y de los tooltips. */
+.heat { display: grid; gap: 2px; font-size: 11px; }
+.heat .cell { padding: 6px 4px; text-align: center; border-radius: 3px; }
+.heat .rowlab, .heat .collab { color: var(--text-secondary); padding: 4px; }
+.heat .rowlab { text-align: right; white-space: nowrap; }
+
+.tip {
+  position: fixed; pointer-events: none; z-index: 20; display: none;
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: 8px; padding: 8px 10px; font-size: 12px;
+  box-shadow: 0 4px 14px rgba(0,0,0,0.14); max-width: 280px;
+}
+.tip .v { font-weight: 600; font-size: 14px; color: var(--text-primary); }
+.tip .k { display: inline-block; width: 14px; height: 2px; vertical-align: middle; margin-right: 6px; }
+.tip .n { color: var(--text-secondary); }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header style="display:flex;justify-content:space-between;align-items:baseline;gap:16px;margin-bottom:18px">
+    <div>
+      <h1>Supervisiones PCI</h1>
+      <div class="sub" id="meta"></div>
+    </div>
+    <button id="theme" class="chip" type="button">Cambiar tema</button>
+  </header>
+
+  <div class="tabs" role="tablist">
+    <button role="tab" data-view="global" aria-selected="true">Global</button>
+    <button role="tab" data-view="responsable" aria-selected="false">Por responsable</button>
+    <button role="tab" data-view="formulario" aria-selected="false">Por formulario</button>
+  </div>
+
+  <div class="filters" id="filters"></div>
+  <div class="chips" id="chips"></div>
+  <main id="view"></main>
+</div>
+<div class="tip" id="tip"></div>
+
+<script>/*__CHARTJS__*/</script>
+<script>const DATA = /*__DATA__*/;</script>
+<script id="mod-store"></script>
+<script id="mod-agg"></script>
+<script id="mod-charts"></script>
+<script id="mod-views"></script>
+<script id="mod-app">
+document.getElementById('meta').textContent =
+  DATA.meta.filas + ' supervisiones · generado ' + DATA.meta.generado;
+document.getElementById('theme').addEventListener('click', () => {
+  const actual = document.documentElement.getAttribute('data-theme');
+  document.documentElement.setAttribute('data-theme', actual === 'dark' ? 'light' : 'dark');
+  window.dispatchEvent(new Event('themechange'));
+});
+</script>
+</body>
+</html>

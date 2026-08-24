@@ -3,9 +3,19 @@ from pathlib import Path
 import pandas as pd
 import pytest
 
-from build_dashboard import AREA_NULA, BuildError, clean, encode, load, validate
+from build_dashboard import (
+    AREA_NULA,
+    BuildError,
+    clean,
+    encode,
+    load,
+    render_html,
+    validate,
+)
 
 XLSX = Path(__file__).resolve().parent.parent / "SupPCI.xlsx"
+TEMPLATE = Path(__file__).resolve().parent.parent / "template.html"
+VENDOR = Path(__file__).resolve().parent.parent / "vendor" / "chart.umd.min.js"
 
 
 def test_load_devuelve_registros_y_formularios():
@@ -203,3 +213,28 @@ def test_cifra_de_control_tasa_por_mes():
         ]
         esperado = _tasa(limpio.loc[limpio["MES"] == mes, "CUMPLE_CORRECTAMENTE"])
         assert sum(cumple) / len(cumple) == pytest.approx(esperado), mes
+
+
+def test_render_html_produce_un_archivo_sin_urls_externas(tmp_path):
+    registros, formularios = load(XLSX)
+    data = encode(clean(registros, formularios))
+    salida = tmp_path / "dashboard.html"
+    escritos = render_html(data, TEMPLATE, VENDOR, salida)
+
+    html = salida.read_text(encoding="utf-8")
+    assert escritos == len(html.encode("utf-8"))
+    assert "/*__DATA__*/" not in html
+    assert "/*__CHARTJS__*/" not in html
+    assert "Chart" in html
+    assert "https://" not in html
+    assert "http://" not in html
+
+
+def test_render_html_embebe_los_datos_reales(tmp_path):
+    registros, formularios = load(XLSX)
+    data = encode(clean(registros, formularios))
+    salida = tmp_path / "dashboard.html"
+    render_html(data, TEMPLATE, VENDOR, salida)
+    html = salida.read_text(encoding="utf-8")
+    assert "Ana María Pérez Gómez" in html
+    assert "ana_mar_a_p_rez_g_mez" not in html

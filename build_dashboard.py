@@ -4,6 +4,8 @@ Pipeline: load -> validate -> clean -> encode -> render_html.
 Ver docs/superpowers/specs/2026-08-24-dashboard-supervisiones-design.md
 """
 
+import json
+import sys
 from pathlib import Path
 
 import pandas as pd
@@ -253,3 +255,52 @@ def encode(df):
             "dia_max": int(df["DIA"].max()),
         },
     }
+
+
+def render_html(data, template, vendor, salida):
+    """Inyecta datos y Chart.js en la plantilla. Devuelve bytes escritos."""
+    html = Path(template).read_text(encoding="utf-8")
+    chartjs = Path(vendor).read_text(encoding="utf-8")
+
+    # ensure_ascii=False mantiene los acentos legibles y pesa menos que \uXXXX.
+    # separators sin espacios recorta cerca de un 8% del JSON.
+    payload = json.dumps(data, ensure_ascii=False, separators=(",", ":"))
+    # </script> dentro de una cadena JSON cerraría el bloque antes de tiempo.
+    payload = payload.replace("</", "<\\/")
+
+    html = html.replace("/*__CHARTJS__*/", chartjs)
+    html = html.replace("/*__DATA__*/", payload)
+
+    salida = Path(salida)
+    salida.write_text(html, encoding="utf-8")
+    return len(html.encode("utf-8"))
+
+
+def main(argv=None):
+    argv = sys.argv[1:] if argv is None else argv
+    raiz = Path(__file__).resolve().parent
+    origen = Path(argv[0]) if argv else raiz / "SupPCI.xlsx"
+    salida = raiz / "dashboard.html"
+
+    registros, formularios = load(origen)
+    print(f"Leídas {len(registros)} filas de REGISTROS")
+
+    validate(registros, formularios)
+
+    limpio = clean(registros, formularios)
+    slugs = sum(registros["RESPONSABLE"].isin(SLUG_NAME_MAP))
+    areas = int(registros["AREA_ESPECIFICA_APLICACION"].isna().sum())
+    print(f"Nombres normalizados: {slugs}")
+    print(f"Áreas nulas rellenadas como «{AREA_NULA}»: {areas}")
+    print(f"Filas descartadas: {len(registros) - len(limpio)}")
+
+    data = encode(limpio)
+    escritos = render_html(
+        data, raiz / "template.html", raiz / "vendor" / "chart.umd.min.js", salida
+    )
+    print(f"Escrito {salida} — {escritos / 1024:.0f} KB")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
