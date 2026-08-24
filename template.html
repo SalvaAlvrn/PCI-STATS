@@ -295,7 +295,293 @@ const agg = (() => {
   return {kpis, rateBy, series, heatmap, tasaDe};
 })();
 </script>
-<script id="mod-charts"></script>
+<script id="mod-charts">
+const charts = (() => {
+  const vivos = new Set();
+  const tip = document.getElementById('tip');
+
+  function token(nombre) {
+    return getComputedStyle(document.documentElement)
+      .getPropertyValue('--' + nombre).trim();
+  }
+
+  const pct = v => v === null ? '—' : (v * 100).toFixed(1) + '%';
+  const num = v => v === null ? '—' : v.toLocaleString('es');
+
+  function destroyAll() {
+    vivos.forEach(c => c.destroy());
+    vivos.clear();
+  }
+
+  /** Tooltip HTML propio: el valor manda, el nombre de la serie acompaña. */
+  function mostrarTip(x, y, filas) {
+    tip.replaceChildren();
+    for (const f of filas) {
+      const linea = document.createElement('div');
+      if (f.color) {
+        const key = document.createElement('span');
+        key.className = 'k';
+        key.style.background = f.color;
+        linea.appendChild(key);
+      }
+      const v = document.createElement('span');
+      v.className = 'v';
+      v.textContent = f.valor;
+      linea.appendChild(v);
+      if (f.nombre) {
+        const nm = document.createElement('span');
+        nm.className = 'n';
+        nm.textContent = ' ' + f.nombre;
+        linea.appendChild(nm);
+      }
+      tip.appendChild(linea);
+    }
+    tip.style.display = 'block';
+    // Reposicionar tras medir, para no salirse del viewport.
+    const caja = tip.getBoundingClientRect();
+    const izq = Math.min(x + 14, window.innerWidth - caja.width - 8);
+    const arr = Math.min(y + 14, window.innerHeight - caja.height - 8);
+    tip.style.left = izq + 'px';
+    tip.style.top = arr + 'px';
+  }
+  function ocultarTip() { tip.style.display = 'none'; }
+
+  const base = () => ({
+    responsive: true,
+    maintainAspectRatio: false,
+    animation: false,
+    interaction: {mode: 'index', intersect: false},
+    plugins: {legend: {display: false}, tooltip: {enabled: false}},
+    scales: {
+      x: {
+        grid: {display: false},
+        border: {color: token('axis')},
+        ticks: {color: token('text-muted'), font: {family: token('sans'), size: 11}}
+      },
+      y: {
+        grid: {color: token('grid'), lineWidth: 1},
+        border: {display: false},
+        ticks: {color: token('text-muted'), font: {family: token('sans'), size: 11}}
+      }
+    }
+  });
+
+  function enganchaTip(canvas, grafico, describir) {
+    const mover = ev => {
+      const puntos = grafico.getElementsAtEventForMode(
+        ev, 'index', {intersect: false}, false);
+      if (!puntos.length) { ocultarTip(); return; }
+      mostrarTip(ev.clientX, ev.clientY, describir(puntos[0].index));
+    };
+    canvas.addEventListener('pointermove', mover);
+    canvas.addEventListener('pointerleave', ocultarTip);
+    // El teclado ve lo mismo que el puntero.
+    canvas.tabIndex = 0;
+    let foco = 0;
+    canvas.addEventListener('keydown', ev => {
+      if (ev.key !== 'ArrowLeft' && ev.key !== 'ArrowRight') return;
+      ev.preventDefault();
+      const n = grafico.data.labels.length;
+      foco = (foco + (ev.key === 'ArrowRight' ? 1 : n - 1)) % n;
+      const caja = canvas.getBoundingClientRect();
+      mostrarTip(caja.left + caja.width * (foco + 0.5) / n,
+                 caja.top + 20, describir(foco));
+    });
+    canvas.addEventListener('blur', ocultarTip);
+  }
+
+  function line(canvas, {labels, series, formato = pct}) {
+    const opciones = base();
+    if (formato === pct) {
+      opciones.scales.y.min = 0;
+      opciones.scales.y.max = 1;
+      opciones.scales.y.ticks.callback = v => (v * 100) + '%';
+    }
+    const grafico = new Chart(canvas, {
+      type: 'line',
+      data: {
+        labels,
+        datasets: series.map(s => ({
+          label: s.label,
+          data: s.data,
+          borderColor: s.color,
+          backgroundColor: s.color,
+          borderWidth: s.ancho || 2,
+          pointRadius: 4,             // marcador de 8px de diámetro
+          pointHoverRadius: 6,
+          pointBorderColor: token('surface'),
+          pointBorderWidth: 2,        // anillo de superficie
+          spanGaps: true,
+          tension: 0
+        }))
+      },
+      options: opciones
+    });
+    vivos.add(grafico);
+    enganchaTip(canvas, grafico, i => [
+      {valor: labels[i], nombre: ''},
+      ...series.map(s => ({
+        color: s.color, valor: formato(s.data[i]), nombre: s.label
+      }))
+    ]);
+    return grafico;
+  }
+
+  function _barras(canvas, {labels, values, formato, horizontal}) {
+    const opciones = base();
+    opciones.indexAxis = horizontal ? 'y' : 'x';
+    if (horizontal) {
+      opciones.scales.x.grid = {color: token('grid'), lineWidth: 1};
+      opciones.scales.y.grid = {display: false};
+      if (formato === pct) {
+        opciones.scales.x.min = 0;
+        opciones.scales.x.max = 1;
+        opciones.scales.x.ticks.callback = v => (v * 100) + '%';
+      }
+    } else if (formato === pct) {
+      opciones.scales.y.min = 0;
+      opciones.scales.y.max = 1;
+      opciones.scales.y.ticks.callback = v => (v * 100) + '%';
+    }
+    const grafico = new Chart(canvas, {
+      type: 'bar',
+      data: {
+        labels,
+        datasets: [{
+          data: values,
+          backgroundColor: token('series-1'),
+          borderRadius: 4,            // extremo de datos redondeado
+          borderSkipped: 'start',     // cuadrado en la línea base
+          maxBarThickness: 24,
+          // El hueco entre barras lo hace la superficie, no un borde.
+          categoryPercentage: 0.82,
+          barPercentage: 0.92
+        }]
+      },
+      options: opciones
+    });
+    vivos.add(grafico);
+    return grafico;
+  }
+
+  function bars(canvas, cfg) {
+    const grafico = _barras(canvas, {...cfg, horizontal: true});
+    enganchaTip(canvas, grafico, i => [
+      {valor: (cfg.formato || pct)(cfg.values[i]), nombre: cfg.labels[i]},
+      ...(cfg.extra ? [{valor: cfg.extra[i], nombre: ''}] : [])
+    ]);
+    return grafico;
+  }
+
+  function columns(canvas, cfg) {
+    const grafico = _barras(canvas, {...cfg, horizontal: false});
+    enganchaTip(canvas, grafico, i => [
+      {valor: (cfg.formato || num)(cfg.values[i]), nombre: cfg.labels[i]}
+    ]);
+    return grafico;
+  }
+
+  /** Mapa de calor en CSS Grid. Rampa secuencial de un solo tono. */
+  function heat(contenedor, {rowLabels, colLabels, cells}) {
+    const pasos = ['seq-100', 'seq-250', 'seq-400', 'seq-550', 'seq-700']
+      .map(token);
+    contenedor.replaceChildren();
+    const reja = document.createElement('div');
+    reja.className = 'heat';
+    reja.style.gridTemplateColumns =
+      `max-content repeat(${colLabels.length}, minmax(52px, 1fr))`;
+
+    reja.appendChild(document.createElement('div'));  // esquina vacía
+    for (const c of colLabels) {
+      const celda = document.createElement('div');
+      celda.className = 'collab';
+      celda.style.textAlign = 'center';
+      celda.textContent = c;
+      reja.appendChild(celda);
+    }
+
+    rowLabels.forEach((etiqueta, f) => {
+      const lab = document.createElement('div');
+      lab.className = 'rowlab';
+      lab.textContent = etiqueta;
+      reja.appendChild(lab);
+      cells[f].forEach((celda, c) => {
+        const div = document.createElement('div');
+        div.className = 'cell';
+        if (celda.total === 0 || celda.tasa === null) {
+          div.style.background = 'transparent';
+          div.style.color = token('text-muted');
+          div.textContent = '·';
+        } else {
+          const paso = Math.min(4, Math.floor(celda.tasa * 5));
+          div.style.background = pasos[paso];
+          // Blanco o tinta según la luminancia del relleno, para que la
+          // etiqueta siempre tenga contraste.
+          div.style.color = paso >= 3 ? '#ffffff' : '#0b0b0b';
+          div.textContent = (celda.tasa * 100).toFixed(0);
+        }
+        div.tabIndex = 0;
+        const describir = ev => mostrarTip(
+          ev.clientX || div.getBoundingClientRect().left,
+          ev.clientY || div.getBoundingClientRect().top,
+          [{valor: pct(celda.tasa), nombre: `${etiqueta} · ${colLabels[c]}`},
+           {valor: num(celda.total), nombre: 'supervisiones'}]);
+        div.addEventListener('pointermove', describir);
+        div.addEventListener('focus', describir);
+        div.addEventListener('pointerleave', ocultarTip);
+        div.addEventListener('blur', ocultarTip);
+        reja.appendChild(div);
+      });
+    });
+    contenedor.appendChild(reja);
+  }
+
+  /** Tabla ordenable: la vista equivalente que acompaña a cada gráfico. */
+  function tabla(contenedor, columnas, filas) {
+    contenedor.replaceChildren();
+    const envoltura = document.createElement('div');
+    envoltura.className = 'scroll-x';
+    const t = document.createElement('table');
+    const thead = document.createElement('thead');
+    const trh = document.createElement('tr');
+    columnas.forEach((col, i) => {
+      const th = document.createElement('th');
+      if (col.num) th.className = 'num';
+      th.textContent = col.titulo;
+      th.addEventListener('click', () => {
+        const asc = th.dataset.orden !== 'asc';
+        filas.sort((a, b) => {
+          const x = a[i], y = b[i];
+          const cmp = typeof x === 'number' && typeof y === 'number'
+            ? x - y : String(x).localeCompare(String(y), 'es');
+          return asc ? cmp : -cmp;
+        });
+        th.dataset.orden = asc ? 'asc' : 'desc';
+        tabla(contenedor, columnas, filas);
+      });
+      trh.appendChild(th);
+    });
+    thead.appendChild(trh);
+    t.appendChild(thead);
+    const tbody = document.createElement('tbody');
+    for (const fila of filas) {
+      const tr = document.createElement('tr');
+      columnas.forEach((col, i) => {
+        const td = document.createElement('td');
+        if (col.num) td.className = 'num';
+        td.textContent = col.formato ? col.formato(fila[i]) : fila[i];
+        tr.appendChild(td);
+      });
+      tbody.appendChild(tr);
+    }
+    t.appendChild(tbody);
+    envoltura.appendChild(t);
+    contenedor.appendChild(envoltura);
+  }
+
+  return {line, bars, columns, heat, tabla, destroyAll, token, pct, num};
+})();
+</script>
 <script id="mod-views"></script>
 <script id="mod-app">
 document.getElementById('meta').textContent =
