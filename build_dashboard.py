@@ -40,10 +40,28 @@ SLUG_NAME_MAP = {
 }
 
 CUMPLE_VALIDOS = {"SI", "NO"}
+ESTADOS_VALIDOS = {"Aprobado", "En espera"}
 METODO_SOPORTADO = "SI_NO_NA"
 FECHA_MINIMA = pd.Timestamp("2020-01-01")
 
 AREA_NULA = "(Sin área específica)"
+RIESGO_NULO = "(Sin nivel de riesgo)"
+
+# Columnas de dimensión que encode() convierte a categoría: un nulo se
+# codificaría como -1 y el JavaScript lo evaluaría como índice inexistente,
+# agrupando esas filas en un bucket fantasma con etiqueta undefined. AREA,
+# RIESGO y MOTIVO tienen su propio nulo con significado y se rellenan en
+# clean(); estas otras no deberían tener nulos y su presencia es un error de
+# datos, no algo que el build deba decidir cómo rellenar.
+COLUMNAS_SIN_NULOS = [
+    "RESPONSABLE",
+    "MEDIDA",
+    "SUBMEDIDA",
+    "UNIDAD_SERVICIO_APLICACION",
+    "GRUPO_OCUPACIONAL",
+    "CARGO",
+    "ESTADO_VALIDACION",
+]
 
 
 def load(path):
@@ -71,6 +89,14 @@ def validate(registros, formularios):
     _columnas_faltantes(registros, COLUMNAS_REGISTROS, "REGISTROS")
     _columnas_faltantes(formularios, COLUMNAS_FORMULARIOS, "FORMULARIOS")
 
+    con_nulos = [c for c in COLUMNAS_SIN_NULOS if registros[c].isna().any()]
+    if con_nulos:
+        raise BuildError(
+            f"Estas columnas no deberían tener nulos y los tienen: "
+            f"{con_nulos}. Un nulo aquí se codificaría como categoría "
+            "fantasma y arruinaría la agregación."
+        )
+
     valores = set(registros["CUMPLE_CORRECTAMENTE"].dropna().unique())
     desconocidos = valores - CUMPLE_VALIDOS
     if desconocidos:
@@ -80,10 +106,25 @@ def validate(registros, formularios):
             f"{sorted(CUMPLE_VALIDOS)} y nulo."
         )
 
+    estados = set(registros["ESTADO_VALIDACION"].dropna().unique())
+    estados_desconocidos = estados - ESTADOS_VALIDOS
+    if estados_desconocidos:
+        raise BuildError(
+            "ESTADO_VALIDACION trae valores no soportados: "
+            f"{sorted(estados_desconocidos)}. El dashboard solo sabe "
+            f"interpretar {sorted(ESTADOS_VALIDOS)}."
+        )
+
     pct = pd.to_numeric(registros["PORCENTAJE_CUMPLIMIENTO"], errors="coerce")
     if pct.isna().any() or ((pct < 0) | (pct > 100)).any():
         raise BuildError(
             "PORCENTAJE_CUMPLIMIENTO tiene valores no numéricos o fuera de 0-100"
+        )
+    if (pct % 1 != 0).any():
+        raise BuildError(
+            "PORCENTAJE_CUMPLIMIENTO tiene valores no enteros. encode() los "
+            "trunca con int(); un valor como 92.5 debe corregirse en el "
+            "origen, no redondearse en silencio."
         )
 
     fechas = pd.to_datetime(registros["FECHA_EVENTO"], errors="coerce")
@@ -96,7 +137,6 @@ def validate(registros, formularios):
             f"a {tope.date()}"
         )
 
-    metodos = set(formularios["METODO_CUMPLIMIENTO"].dropna().unique())
     usados = set(registros["ID_FORMULARIO"].unique())
     metodos_usados = set(
         formularios[formularios["ID_FORMULARIO"].isin(usados)][
@@ -111,8 +151,6 @@ def validate(registros, formularios):
             "cumplimiento y requieren una decisión de producto antes de "
             "incluirlos; no se pueden promediar con los SI_NO_NA."
         )
-    del metodos  # solo se valida sobre los métodos realmente usados
-
     slugs = {
         nombre
         for nombre in registros["RESPONSABLE"].dropna().unique()
@@ -127,15 +165,24 @@ def validate(registros, formularios):
         )
 
 
-def _nombres_actuales(formularios):
-    """Nombre de cada formulario según su versión más alta.
+def _filas_actuales(formularios):
+    """Fila de cada formulario en su versión más alta del catálogo.
 
-    F031 cambió de nombre entre versiones, de modo que ID_FORMULARIO tiene
-    47 valores distintos pero FORMULARIO tiene 48. La clave es el ID.
+    El catálogo (FORMULARIOS) es la única fuente de verdad para nombre,
+    versión, medida y submedida vigentes de cada ID_FORMULARIO: tiene una
+    fila por versión y aquí se toma la de VERSION_FORMULARIO más alta. Esto
+    es distinto de REGISTROS.FORMULARIO, que para un puñado de filas de F031
+    conserva el nombre anterior a una renombrada — eso es historial de la
+    migración en los registros, no una segunda versión en el catálogo, y por
+    eso no se usa como fuente.
     """
     ordenado = formularios.sort_values("VERSION_FORMULARIO")
-    ultimo = ordenado.groupby("ID_FORMULARIO").last()
-    return ultimo["NOMBRE_FORMULARIO"].to_dict()
+    return ordenado.groupby("ID_FORMULARIO").last()
+
+
+def _nombres_actuales(formularios):
+    """Nombre de cada formulario según su versión más alta en el catálogo."""
+    return _filas_actuales(formularios)["NOMBRE_FORMULARIO"].to_dict()
 
 
 def clean(registros, formularios):
@@ -151,7 +198,7 @@ def clean(registros, formularios):
     df["CONCLUSIONES_RECOMENDACIONES"] = (
         df["CONCLUSIONES_RECOMENDACIONES"].fillna("")
     )
-    df["NIVEL_RIESGO"] = df["NIVEL_RIESGO"].fillna("(Sin nivel de riesgo)")
+    df["NIVEL_RIESGO"] = df["NIVEL_RIESGO"].fillna(RIESGO_NULO)
 
     nombres = _nombres_actuales(formularios)
     df["NOMBRE_FORMULARIO_ACTUAL"] = df["ID_FORMULARIO"].map(nombres)
@@ -198,7 +245,7 @@ DIMENSIONES = {
 }
 
 
-def encode(df):
+def encode(df, formularios):
     """Codifica el DataFrame limpio en diccionarios + columnas paralelas."""
     dims = {}
     rows = {}
@@ -218,14 +265,19 @@ def encode(df):
     rows["no"] = [int(v) for v in df["TOTAL_NO"]]
     rows["na"] = [int(v) for v in df["TOTAL_NA"]]
 
+    # nombre, versión, medida y submedida deben venir todos de la misma
+    # fuente — la fila de versión más alta en el catálogo — para que no
+    # puedan divergir si el catálogo alguna vez tiene una versión que
+    # ningún registro usa todavía.
+    filas_catalogo = _filas_actuales(formularios)
     forms = {}
-    for id_form, grupo in df.groupby("ID_FORMULARIO"):
-        ultima = grupo.sort_values("VERSION_FORMULARIO").iloc[-1]
+    for id_form in df["ID_FORMULARIO"].unique():
+        fila = filas_catalogo.loc[id_form]
         forms[id_form] = {
-            "nombre": ultima["NOMBRE_FORMULARIO_ACTUAL"],
-            "version": int(ultima["VERSION_FORMULARIO"]),
-            "medida": ultima["MEDIDA"],
-            "submedida": ultima["SUBMEDIDA"],
+            "nombre": fila["NOMBRE_FORMULARIO"],
+            "version": int(fila["VERSION_FORMULARIO"]),
+            "medida": fila["MEDIDA"],
+            "submedida": fila["SUBMEDIDA"],
         }
 
     # Las conclusiones solo se consultan sobre lo que falló; embeberlas todas
@@ -257,10 +309,22 @@ def encode(df):
     }
 
 
+def _leer_o_falla(path, ayuda=""):
+    path = Path(path)
+    if not path.exists():
+        raise BuildError(f"No existe {path}." + (f" {ayuda}" if ayuda else ""))
+    return path.read_text(encoding="utf-8")
+
+
 def render_html(data, template, vendor, salida):
     """Inyecta datos y Chart.js en la plantilla. Devuelve bytes escritos."""
-    html = Path(template).read_text(encoding="utf-8")
-    chartjs = Path(vendor).read_text(encoding="utf-8")
+    html = _leer_o_falla(template)
+    chartjs = _leer_o_falla(
+        vendor,
+        "Chart.js no viene en el repo — descárgalo con: curl -L "
+        "https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js "
+        "-o vendor/chart.umd.min.js",
+    )
 
     # ensure_ascii=False mantiene los acentos legibles y pesa menos que \uXXXX.
     # separators sin espacios recorta cerca de un 8% del JSON.
@@ -292,9 +356,8 @@ def main(argv=None):
     areas = int(registros["AREA_ESPECIFICA_APLICACION"].isna().sum())
     print(f"Nombres normalizados: {slugs}")
     print(f"Áreas nulas rellenadas como «{AREA_NULA}»: {areas}")
-    print(f"Filas descartadas: {len(registros) - len(limpio)}")
 
-    data = encode(limpio)
+    data = encode(limpio, formularios)
     escritos = render_html(
         data, raiz / "template.html", raiz / "vendor" / "chart.umd.min.js", salida
     )

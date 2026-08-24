@@ -65,6 +65,29 @@ def test_validate_avisa_de_metodo_no_soportado(registros_ok, formularios_ok):
         validate(registros_ok, formularios_ok)
 
 
+def test_validate_rechaza_nulo_en_columna_de_dimension(registros_ok, formularios_ok):
+    registros_ok.loc[0, "GRUPO_OCUPACIONAL"] = None
+    with pytest.raises(BuildError, match="GRUPO_OCUPACIONAL"):
+        validate(registros_ok, formularios_ok)
+
+
+def test_validate_rechaza_estado_de_validacion_desconocido(
+    registros_ok, formularios_ok
+):
+    registros_ok.loc[0, "ESTADO_VALIDACION"] = "Rechazado"
+    with pytest.raises(BuildError, match="Rechazado"):
+        validate(registros_ok, formularios_ok)
+
+
+def test_validate_rechaza_porcentaje_no_entero(registros_ok, formularios_ok):
+    registros_ok["PORCENTAJE_CUMPLIMIENTO"] = registros_ok[
+        "PORCENTAJE_CUMPLIMIENTO"
+    ].astype(float)
+    registros_ok.loc[0, "PORCENTAJE_CUMPLIMIENTO"] = 92.5
+    with pytest.raises(BuildError, match="PORCENTAJE_CUMPLIMIENTO"):
+        validate(registros_ok, formularios_ok)
+
+
 def test_validate_rechaza_slug_desconocido(registros_ok, formularios_ok):
     registros_ok.loc[0, "RESPONSABLE"] = "pedro_nuevo_sin_mapear"
     with pytest.raises(BuildError, match="pedro_nuevo_sin_mapear"):
@@ -130,7 +153,7 @@ def _tasa(serie):
 
 
 def test_encode_construye_dimensiones_y_filas(registros_ok, formularios_ok):
-    data = encode(clean(registros_ok, formularios_ok))
+    data = encode(clean(registros_ok, formularios_ok), formularios_ok)
     assert data["dims"]["responsable"] == [
         "Ana Pérez",
         "Ana María Pérez Gómez",
@@ -142,7 +165,7 @@ def test_encode_construye_dimensiones_y_filas(registros_ok, formularios_ok):
 
 def test_encode_es_reversible(registros_ok, formularios_ok):
     limpio = clean(registros_ok, formularios_ok)
-    data = encode(limpio)
+    data = encode(limpio, formularios_ok)
     decodificado = [
         data["dims"]["responsable"][i] for i in data["rows"]["responsable"]
     ]
@@ -152,7 +175,7 @@ def test_encode_es_reversible(registros_ok, formularios_ok):
 
 
 def test_encode_guarda_metadatos_de_formulario(registros_ok, formularios_ok):
-    data = encode(clean(registros_ok, formularios_ok))
+    data = encode(clean(registros_ok, formularios_ok), formularios_ok)
     assert data["forms"]["F002"]["nombre"] == "Guantes"
     assert data["forms"]["F002"]["medida"] == "Medidas estándar"
 
@@ -160,20 +183,20 @@ def test_encode_guarda_metadatos_de_formulario(registros_ok, formularios_ok):
 def test_encode_solo_embebe_conclusiones_de_los_que_no_cumplen(
     registros_ok, formularios_ok
 ):
-    data = encode(clean(registros_ok, formularios_ok))
+    data = encode(clean(registros_ok, formularios_ok), formularios_ok)
     assert list(data["texts"]["conclusiones"]) == ["1"]
     assert data["texts"]["conclusiones"]["1"] == "Reponer jabón"
 
 
 def test_encode_deja_evaluado_como_texto_plano(registros_ok, formularios_ok):
-    data = encode(clean(registros_ok, formularios_ok))
+    data = encode(clean(registros_ok, formularios_ok), formularios_ok)
     assert data["texts"]["evaluado"] == ["Juan", "Luis", "Marta", "Rosa"]
     assert "evaluado" not in data["dims"]
 
 
 def test_cifra_de_control_tasa_global():
     registros, formularios = load(XLSX)
-    data = encode(clean(registros, formularios))
+    data = encode(clean(registros, formularios), formularios)
     cumple = data["rows"]["cumple"]
     con_dictamen = [c for c in cumple if c >= 0]
     del_pipeline = sum(con_dictamen) / len(con_dictamen)
@@ -184,7 +207,7 @@ def test_cifra_de_control_tasa_global():
 def test_cifra_de_control_tasa_por_responsable():
     registros, formularios = load(XLSX)
     limpio = clean(registros, formularios)
-    data = encode(limpio)
+    data = encode(limpio, formularios)
     dims = data["dims"]["responsable"]
     filas = data["rows"]
     for indice, nombre in enumerate(dims):
@@ -202,7 +225,7 @@ def test_cifra_de_control_tasa_por_responsable():
 def test_cifra_de_control_tasa_por_mes():
     registros, formularios = load(XLSX)
     limpio = clean(registros, formularios)
-    data = encode(limpio)
+    data = encode(limpio, formularios)
     dims = data["dims"]["mes"]
     filas = data["rows"]
     for indice, mes in enumerate(dims):
@@ -217,7 +240,7 @@ def test_cifra_de_control_tasa_por_mes():
 
 def test_render_html_produce_un_archivo_sin_urls_externas(tmp_path):
     registros, formularios = load(XLSX)
-    data = encode(clean(registros, formularios))
+    data = encode(clean(registros, formularios), formularios)
     salida = tmp_path / "dashboard.html"
     escritos = render_html(data, TEMPLATE, VENDOR, salida)
 
@@ -240,9 +263,37 @@ def test_render_html_produce_un_archivo_sin_urls_externas(tmp_path):
 
 def test_render_html_embebe_los_datos_reales(tmp_path):
     registros, formularios = load(XLSX)
-    data = encode(clean(registros, formularios))
+    data = encode(clean(registros, formularios), formularios)
     salida = tmp_path / "dashboard.html"
     render_html(data, TEMPLATE, VENDOR, salida)
     html = salida.read_text(encoding="utf-8")
     assert "Ana María Pérez Gómez" in html
     assert "ana_mar_a_p_rez_g_mez" not in html
+
+
+def test_render_html_vendor_ausente_levanta_builderror_con_instrucciones(tmp_path):
+    registros, formularios = load(XLSX)
+    data = encode(clean(registros, formularios), formularios)
+    salida = tmp_path / "dashboard.html"
+    vendor_inexistente = tmp_path / "no_esta" / "chart.umd.min.js"
+    with pytest.raises(BuildError, match="curl"):
+        render_html(data, TEMPLATE, vendor_inexistente, salida)
+
+
+def test_encode_toma_nombre_version_medida_y_submedida_del_catalogo(
+    registros_ok, formularios_ok
+):
+    """Las cuatro cosas vienen de la fila de versión más alta del catálogo,
+
+    no de la fila de versión más alta entre los registros usados: si el
+    catálogo tuviera una versión que ningún registro usa todavía, el header
+    del formulario debe reflejarla igual.
+    """
+    data = encode(clean(registros_ok, formularios_ok), formularios_ok)
+    esperado = formularios_ok[formularios_ok["ID_FORMULARIO"] == "F002"].sort_values(
+        "VERSION_FORMULARIO"
+    ).iloc[-1]
+    assert data["forms"]["F002"]["nombre"] == esperado["NOMBRE_FORMULARIO"]
+    assert data["forms"]["F002"]["version"] == int(esperado["VERSION_FORMULARIO"])
+    assert data["forms"]["F002"]["medida"] == esperado["MEDIDA"]
+    assert data["forms"]["F002"]["submedida"] == esperado["SUBMEDIDA"]

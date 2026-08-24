@@ -257,7 +257,17 @@ const agg = (() => {
     }
     // dims.mes y dims.semana vienen ordenados alfabéticamente desde Python,
     // que para "YYYY-MM" y "YYYY-Www" equivale al orden cronológico.
-    const orden = [...presentes].sort((a, b) => a - b);
+    const presentesOrdenados = [...presentes].sort((a, b) => a - b);
+    // Se completan los períodos intermedios sin filas para que un hueco de
+    // varios meses se vea como un hueco (la línea se corta ahí gracias a
+    // spanGaps: false) y no como un solo paso que aplana la tendencia real.
+    const orden = presentesOrdenados.length
+      ? Array.from(
+          {length: presentesOrdenados[presentesOrdenados.length - 1]
+                   - presentesOrdenados[0] + 1},
+          (_, k) => presentesOrdenados[0] + k
+        )
+      : [];
     return {
       labels: orden.map(p => etiquetas[p]),
       volumen: orden.map(p => vol.get(p) || 0),
@@ -427,7 +437,7 @@ const charts = (() => {
           pointHoverRadius: 6,
           pointBorderColor: token('surface'),
           pointBorderWidth: 2,        // anillo de superficie
-          spanGaps: true,
+          spanGaps: false,
           tension: 0
         }))
       },
@@ -481,7 +491,13 @@ const charts = (() => {
   }
 
   function bars(canvas, cfg) {
-    const grafico = _barras(canvas, {...cfg, horizontal: true});
+    // Chart.js no dibuja nada para null y una barra de ancho cero para 0:
+    // sin esto, "cumplió 0 de N" y "no se puede puntuar" se ven idénticos
+    // al fondo de un ranking. Se marca en la etiqueta, como ya hace el
+    // mapa de calor con el '·'.
+    const etiquetas = cfg.labels.map((etiqueta, i) =>
+      cfg.values[i] === null ? etiqueta + ' — sin dictamen' : etiqueta);
+    const grafico = _barras(canvas, {...cfg, labels: etiquetas, horizontal: true});
     enganchaTip(canvas, grafico, i => [
       {valor: (cfg.formato || pct)(cfg.values[i]), nombre: cfg.labels[i]},
       ...(cfg.extra ? [{valor: cfg.extra[i], nombre: ''}] : [])
