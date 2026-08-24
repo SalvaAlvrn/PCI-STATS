@@ -1,0 +1,138 @@
+<!doctype html>
+<html lang="es">
+<head><meta charset="utf-8"><title>Pruebas de agg</title>
+<style>body{font-family:system-ui,sans-serif;padding:20px}
+.ok{color:#0ca30c}.fail{color:#d03b3b;font-weight:600}</style>
+</head>
+<body>
+<h1>Pruebas de store y agg</h1>
+<div id="out"></div>
+
+<script>
+// DATA sintético: 5 filas, 2 responsables, 2 meses.
+// Ana: SI, NO, SI -> tasa 2/3. Beto: SI, sin dictamen -> tasa 1/1.
+const DATA = {
+  dims: {
+    responsable: ["Ana", "Beto"],
+    formulario: ["F001", "F002"],
+    medida: ["Estándar", "Específica"],
+    submedida: ["Higiene", "Barreras"],
+    unidad: ["UCI", "Emergencia"],
+    area: ["Box 1", "Triage"],
+    grupo: ["Enfermería", "Medicina"],
+    cargo: ["Técnico", "Jefe"],
+    estado: ["Aprobado", "En espera"],
+    riesgo: ["(Sin nivel de riesgo)", "Alto"],
+    motivo: ["", "Sin insumos"],
+    mes: ["2026-07", "2026-08"],
+    semana: ["2026-W27", "2026-W28", "2026-W32"]
+  },
+  forms: {
+    F001: {nombre: "Lavado", version: 1, medida: "Estándar", submedida: "Higiene"},
+    F002: {nombre: "Guantes", version: 2, medida: "Específica", submedida: "Barreras"}
+  },
+  rows: {
+    responsable: [0, 0, 0, 1, 1],
+    formulario:  [0, 0, 1, 1, 1],
+    medida:      [0, 0, 1, 1, 1],
+    submedida:   [0, 0, 1, 1, 1],
+    unidad:      [0, 1, 0, 0, 1],
+    area:        [0, 1, 0, 1, 0],
+    grupo:       [0, 0, 1, 1, 0],
+    cargo:       [0, 0, 0, 0, 1],
+    estado:      [0, 1, 1, 1, 1],
+    riesgo:      [0, 1, 0, 0, 0],
+    motivo:      [0, 1, 0, 0, 0],
+    mes:         [0, 0, 1, 0, 1],
+    semana:      [0, 1, 2, 1, 2],
+    dia:         [20635, 20642, 20670, 20642, 20670],
+    cumple:      [1, 0, 1, 1, -1],
+    pct:         [100, 60, 100, 90, 80],
+    si:          [5, 3, 4, 4, 4],
+    no:          [0, 2, 0, 1, 0],
+    na:          [1, 1, 2, 0, 0]
+  },
+  texts: {
+    evaluado: ["Juan", "Luis", "Marta", "Rosa", "Ema"],
+    conclusiones: {"1": "Reponer jabón"}
+  },
+  meta: {generado: "2026-08-24 09:00", filas: 5, dia_min: 20635, dia_max: 20670}
+};
+
+let pasadas = 0, fallidas = 0;
+function check(nombre, real, esperado) {
+  const a = JSON.stringify(real), b = JSON.stringify(esperado);
+  const ok = a === b;
+  ok ? pasadas++ : fallidas++;
+  const linea = document.createElement('div');
+  linea.className = ok ? 'ok' : 'fail';
+  linea.textContent = (ok ? 'PASA  ' : 'FALLA ') + nombre +
+    (ok ? '' : ` — esperado ${b}, obtenido ${a}`);
+  document.getElementById('out').appendChild(linea);
+}
+function resumen() {
+  const linea = document.createElement('h2');
+  linea.textContent = `${pasadas} pasan, ${fallidas} fallan`;
+  linea.className = fallidas ? 'fail' : 'ok';
+  document.getElementById('out').appendChild(linea);
+}
+</script>
+
+<!-- Los módulos bajo prueba se pegan aquí, copiados de template.html -->
+<script id="mod-store">
+const store = (() => {
+  const DIMS_FILTRABLES = [
+    'medida', 'submedida', 'unidad', 'grupo', 'cargo', 'estado'
+  ];
+  const filters = {desde: null, hasta: null};
+  DIMS_FILTRABLES.forEach(k => { filters[k] = null; });
+
+  const oyentes = [];
+  const n = DATA.rows.cumple.length;
+
+  function activeRows() {
+    const r = DATA.rows;
+    const out = [];
+    for (let i = 0; i < n; i++) {
+      if (filters.desde !== null && r.dia[i] < filters.desde) continue;
+      if (filters.hasta !== null && r.dia[i] > filters.hasta) continue;
+      let pasa = true;
+      for (const k of DIMS_FILTRABLES) {
+        if (filters[k] !== null && r[k][i] !== filters[k]) { pasa = false; break; }
+      }
+      if (pasa) out.push(i);
+    }
+    return out;
+  }
+
+  function set(clave, valor) { filters[clave] = valor; emit(); }
+  function clear(clave) { filters[clave] = null; emit(); }
+  function clearAll() {
+    Object.keys(filters).forEach(k => { filters[k] = null; });
+    emit();
+  }
+  function onChange(fn) { oyentes.push(fn); }
+  function emit() { oyentes.forEach(fn => fn()); }
+
+  return {filters, dimsFiltrables: DIMS_FILTRABLES,
+          activeRows, set, clear, clearAll, onChange, emit};
+})();
+</script>
+<script id="mod-agg"></script>
+
+<script>
+check('sin filtros devuelve todas las filas', store.activeRows(), [0,1,2,3,4]);
+store.set('unidad', 0);
+check('filtro por unidad UCI', store.activeRows(), [0,2,3]);
+store.clearAll();
+store.set('desde', 20660);
+check('filtro por fecha desde', store.activeRows(), [2,4]);
+store.clearAll();
+store.set('medida', 1); store.set('cargo', 0);
+check('dos filtros se combinan con AND', store.activeRows(), [2,3]);
+store.clearAll();
+check('clearAll restaura todo', store.activeRows(), [0,1,2,3,4]);
+resumen();
+</script>
+</body>
+</html>

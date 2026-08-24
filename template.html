@@ -144,7 +144,45 @@ td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
 
 <script>/*__CHARTJS__*/</script>
 <script>const DATA = /*__DATA__*/;</script>
-<script id="mod-store"></script>
+<script id="mod-store">
+const store = (() => {
+  const DIMS_FILTRABLES = [
+    'medida', 'submedida', 'unidad', 'grupo', 'cargo', 'estado'
+  ];
+  const filters = {desde: null, hasta: null};
+  DIMS_FILTRABLES.forEach(k => { filters[k] = null; });
+
+  const oyentes = [];
+  const n = DATA.rows.cumple.length;
+
+  function activeRows() {
+    const r = DATA.rows;
+    const out = [];
+    for (let i = 0; i < n; i++) {
+      if (filters.desde !== null && r.dia[i] < filters.desde) continue;
+      if (filters.hasta !== null && r.dia[i] > filters.hasta) continue;
+      let pasa = true;
+      for (const k of DIMS_FILTRABLES) {
+        if (filters[k] !== null && r[k][i] !== filters[k]) { pasa = false; break; }
+      }
+      if (pasa) out.push(i);
+    }
+    return out;
+  }
+
+  function set(clave, valor) { filters[clave] = valor; emit(); }
+  function clear(clave) { filters[clave] = null; emit(); }
+  function clearAll() {
+    Object.keys(filters).forEach(k => { filters[k] = null; });
+    emit();
+  }
+  function onChange(fn) { oyentes.push(fn); }
+  function emit() { oyentes.forEach(fn => fn()); }
+
+  return {filters, dimsFiltrables: DIMS_FILTRABLES,
+          activeRows, set, clear, clearAll, onChange, emit};
+})();
+</script>
 <script id="mod-agg"></script>
 <script id="mod-charts"></script>
 <script id="mod-views"></script>
