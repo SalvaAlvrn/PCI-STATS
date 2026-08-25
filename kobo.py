@@ -289,6 +289,17 @@ def construir(token, servidor=KOBO_SERVIDOR, uid=KOBO_ASSET_UID):
         dims[clave] = categorias
         rows[clave] = [indice[v] for v in valores]
 
+    # Cero actividades declaradas sobre envíos que existen significa que los
+    # nombres de opción dejaron de emparejar, no que nadie trabajara: el
+    # campo es obligatorio en el formulario. Sin esta comprobación el
+    # apartado se publicaría entero a cero sin decir por qué.
+    if filas and not any(any(f["actividades"]) for f in filas):
+        raise KoboError(
+            f"Ninguno de los {len(filas)} envíos declara actividad alguna en "
+            "«Producción Reportada». Las opciones del formulario dejaron de "
+            "coincidir con el manifiesto de kobo.py."
+        )
+
     rows["dia"] = dias
     rows["actividades"] = [
         [f["actividades"][a] for f in filas] for a in range(len(ACTIVIDADES))

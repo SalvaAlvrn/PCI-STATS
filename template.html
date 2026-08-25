@@ -135,6 +135,7 @@ tfoot td { font-weight: 600; border-top: 2px solid var(--border); border-bottom:
     <button role="tab" data-view="global" aria-selected="true">Global</button>
     <button role="tab" data-view="responsable" aria-selected="false">Por responsable</button>
     <button role="tab" data-view="formulario" aria-selected="false">Por formulario</button>
+    <button role="tab" data-view="iaas" aria-selected="false">Investigación de IAAS</button>
   </div>
 
   <div class="filters" id="filters"></div>
@@ -182,6 +183,27 @@ const store = (() => {
 
   return {filters, dimsFiltrables: DIMS_FILTRABLES,
           activeRows, set, clear, clearAll, onChange, emit};
+})();
+</script>
+<script id="mod-store-iaas">
+/** Filtros del apartado de IAAS.
+ *
+ * Store propio y no una rama del anterior: las dimensiones son otras y
+ * mezclarlas dejaría selectores muertos en las dos vistas.
+ */
+const storeIaas = (() => {
+  const filters = {desde: null, hasta: null, responsable: null,
+                   servicio: null, actividad: null};
+  const oyentes = [];
+  function set(clave, valor) { filters[clave] = valor; emit(); }
+  function clear(clave) { filters[clave] = null; emit(); }
+  function clearAll() {
+    Object.keys(filters).forEach(k => { filters[k] = null; });
+    emit();
+  }
+  function onChange(fn) { oyentes.push(fn); }
+  function emit() { oyentes.forEach(fn => fn()); }
+  return {filters, set, clear, clearAll, onChange, emit};
 })();
 </script>
 <script id="mod-agg">
@@ -801,6 +823,8 @@ const charts = (() => {
 const views = (() => {
   const estado = {vista: 'global', responsable: null, formulario: null};
   const contenedor = document.getElementById('view');
+  // Null cuando Kobo falló: renderIaas pinta el aviso en su lugar.
+  const iaas = DATA.iaas.ok ? crearIaas(DATA.iaas) : null;
 
   /** Card con título y, opcionalmente, un botón que alterna gráfico/tabla. */
   function card(titulo, subtitulo) {
@@ -900,6 +924,9 @@ const views = (() => {
   function render() {
     charts.destroyAll();
     contenedor.replaceChildren();
+    // La vista de IAAS tiene su propia fuente y sus propios filtros: no pasa
+    // por store.activeRows().
+    if (estado.vista === 'iaas') { renderIaas(); return; }
     const filas = store.activeRows();
     if (!filas.length) {
       contenedor.appendChild(vacio('Sin registros para estos filtros.'));
@@ -1193,6 +1220,125 @@ const views = (() => {
     contenedor.appendChild(tForm);
   }
 
+  function renderIaas() {
+    if (!DATA.iaas.ok) {
+      // La pestaña sigue existiendo y dice por qué no hay datos: si
+      // desapareciera, un fallo de Kobo pasaría por "aquí nunca hubo nada".
+      contenedor.appendChild(vacio(
+        'Datos de Kobo no disponibles: ' + DATA.iaas.error +
+        (DATA.iaas.fecha ? ' (último intento: ' + DATA.iaas.fecha + ')' : '')));
+      return;
+    }
+    const filas = iaas.filasActivas(storeIaas.filters);
+    if (!filas.length) {
+      contenedor.appendChild(vacio('Sin registros para estos filtros.'));
+      return;
+    }
+    const k = iaas.kpis(filas);
+
+    const fila = document.createElement('div');
+    fila.className = 'kpis';
+    fila.style.marginBottom = '16px';
+    fila.append(
+      kpi('Registros', charts.num(k.registros)),
+      kpi('Cumplimiento', charts.pct(k.tasa)),
+      kpi('Ítems respondidos', charts.num(k.respondidos)),
+      kpi('Ítems en NO', charts.num(k.no))
+    );
+    contenedor.appendChild(fila);
+
+    // Los pacientes distintos no son filtrables: contarlos por filtro
+    // exigiría publicar un identificador por fila, y fecha + servicio +
+    // responsable basta para reidentificar a alguien. Solo el total.
+    const nota = document.createElement('div');
+    nota.className = 'sub';
+    nota.style.marginBottom = '16px';
+    nota.textContent = 'Sobre el periodo completo: ' +
+      charts.num(DATA.iaas.meta.pacientes) + ' pacientes distintos.';
+    contenedor.appendChild(nota);
+
+    const porAct = iaas.porActividad(filas);
+    const tAct = card('Cumplimiento por actividad', null);
+    conTabla(tAct,
+      [{titulo: 'Actividad'}, {titulo: 'Registros', num: true, formato: charts.num},
+       {titulo: 'Tasa', num: true, formato: charts.pct}],
+      porAct.map(e => [e.label, e.registros, e.tasa]),
+      zona => {
+        const caja = document.createElement('div');
+        caja.className = 'plot';
+        caja.style.height = Math.max(140, porAct.length * 24 + 40) + 'px';
+        const lienzo = document.createElement('canvas');
+        caja.appendChild(lienzo);
+        zona.appendChild(caja);
+        charts.bars(lienzo, {
+          labels: porAct.map(e => `${e.label} (${e.registros})`),
+          values: porAct.map(e => e.tasa),
+          extra: porAct.map(e => `${e.si} de ${e.si + e.no} ítems respondidos`),
+          formato: charts.pct
+        });
+      });
+    contenedor.appendChild(tAct);
+
+    const porIt = iaas.porItem(filas);
+    const sumaIt = agg.totalDe(
+      porIt.map(e => ({si: e.si, no: e.no, total: e.respondidos})));
+    // totalDe devuelve {n, total, tasa}; el recuento de NO se suma aparte.
+    const noIt = porIt.reduce((a, e) => a + e.no, 0);
+    const tItems = card('Ítems',
+      'Ordenados por incumplimientos: lo que hay que mirar va arriba.');
+    charts.tabla(zonaDe(tItems),
+      [{titulo: 'Ítem'}, {titulo: 'Actividad'},
+       {titulo: 'Respondidos', num: true, formato: charts.num},
+       {titulo: 'NO', num: true, formato: charts.num},
+       {titulo: 'Tasa', num: true, formato: charts.pct}],
+      porIt.map(e => [e.titulo, e.actividad, e.respondidos, e.no, e.tasa]),
+      {total: [`Total (${porIt.length} ítems)`, '', sumaIt.total,
+               noIt, sumaIt.tasa]});
+    contenedor.appendChild(tItems);
+
+    const tProd = card('Producción por actividad',
+                       'Cuántos registros declararon cada actividad.');
+    conTabla(tProd,
+      [{titulo: 'Actividad'}, {titulo: 'Registros', num: true, formato: charts.num}],
+      porAct.map(e => [e.label, e.registros]),
+      zona => charts.columns(plot(zona, 'i-prod'), {
+        labels: porAct.map(e => e.label),
+        values: porAct.map(e => e.registros),
+        formato: charts.num
+      }));
+    contenedor.appendChild(tProd);
+
+    const rejilla = document.createElement('div');
+    rejilla.className = 'grid-2';
+    for (const [clave, titulo] of [['responsable', 'Por responsable'],
+                                   ['servicio', 'Por servicio']]) {
+      const datos = iaas.porDim(filas, clave);
+      const suma = agg.totalDe(
+        datos.map(e => ({si: e.si, no: e.no, total: e.registros})));
+      const tarjeta = card(titulo, null);
+      charts.tabla(zonaDe(tarjeta),
+        [{titulo}, {titulo: 'Registros', num: true, formato: charts.num},
+         {titulo: 'Tasa', num: true, formato: charts.pct}],
+        datos.map(e => [e.label, e.registros, e.tasa]),
+        {total: [`Total (${suma.n})`, suma.total, suma.tasa]});
+      rejilla.appendChild(tarjeta);
+    }
+    contenedor.appendChild(rejilla);
+
+    const s = iaas.series(filas, 'mes');
+    const tEvo = card('Evolución mensual', null);
+    conTabla(tEvo,
+      [{titulo: 'Mes'}, {titulo: 'Registros', num: true, formato: charts.num},
+       {titulo: 'Tasa', num: true, formato: charts.pct}],
+      s.labels.map((l, i) => [l, s.volumen[i], s.tasa[i]]),
+      zona => charts.line(plot(zona, 'i-evo'), {
+        labels: s.labels,
+        series: [{label: 'Cumplimiento', data: s.tasa,
+                  color: charts.token('series-1')}]
+      }));
+    contenedor.appendChild(tEvo);
+  }
+
   function irA(vista, clave) {
     estado.vista = vista;
     if (vista === 'responsable') estado.responsable = clave;
@@ -1463,19 +1609,99 @@ const app = (() => {
     return label;
   }
 
-  function construirBarra() {
-    // El rango de fechas va primero: es el filtro al que todos van.
-    barra.append(fecha('desde', 'Desde'), fecha('hasta', 'Hasta'));
-    store.dimsFiltrables.forEach(k => barra.appendChild(selector(k)));
+  const FILTROS_IAAS = ['responsable', 'servicio', 'actividad'];
+  const ETIQUETAS_IAAS = {responsable: 'Responsable', servicio: 'Servicio',
+                          actividad: 'Actividad'};
+
+  function opcionesIaas(clave) {
+    return clave === 'actividad' ? DATA.iaas.actividades : DATA.iaas.dims[clave];
+  }
+
+  function selectorIaas(clave) {
+    const label = document.createElement('label');
+    label.textContent = ETIQUETAS_IAAS[clave];
+    const sel = document.createElement('select');
+    const todos = document.createElement('option');
+    todos.value = '';
+    todos.textContent = 'Todos';
+    sel.appendChild(todos);
+    opcionesIaas(clave).forEach((valor, i) => {
+      const op = document.createElement('option');
+      op.value = String(i);
+      op.textContent = valor;   // valor venido de Kobo: textContent, no innerHTML
+      sel.appendChild(op);
+    });
+    sel.addEventListener('change', () => {
+      storeIaas.set(clave, sel.value === '' ? null : Number(sel.value));
+    });
+    sel.dataset.clave = clave;
+    label.appendChild(sel);
+    return label;
+  }
+
+  function fechaIaas(clave, texto) {
+    const label = document.createElement('label');
+    label.textContent = texto;
+    const input = document.createElement('input');
+    input.type = 'date';
+    input.min = aISO(DATA.iaas.meta.dia_min);
+    input.max = aISO(DATA.iaas.meta.dia_max);
+    input.addEventListener('change', () => {
+      storeIaas.set(clave, input.value ? aDia(input.value) : null);
+    });
+    input.dataset.clave = clave;
+    label.appendChild(input);
+    return label;
+  }
+
+  function botonLimpiar(alLimpiar) {
     const limpiar = document.createElement('button');
     limpiar.className = 'chip';
     limpiar.type = 'button';
     limpiar.textContent = 'Limpiar filtros';
     limpiar.addEventListener('click', () => {
       barra.querySelectorAll('select, input').forEach(c => { c.value = ''; });
-      store.clearAll();
+      alLimpiar();
     });
-    barra.appendChild(limpiar);
+    return limpiar;
+  }
+
+  function construirBarra() {
+    // La barra se reconstruye al cambiar de pestaña: las dimensiones de
+    // supervisión no existen en Kobo y aparecerían como selectores muertos.
+    barra.replaceChildren();
+    if (views.estado.vista === 'iaas') {
+      // Sin datos de Kobo no hay nada que filtrar; el aviso lo pinta la vista.
+      if (!DATA.iaas.ok) return;
+      barra.append(fechaIaas('desde', 'Desde'), fechaIaas('hasta', 'Hasta'));
+      FILTROS_IAAS.forEach(k => barra.appendChild(selectorIaas(k)));
+      barra.appendChild(botonLimpiar(() => storeIaas.clearAll()));
+      return;
+    }
+    // El rango de fechas va primero: es el filtro al que todos van.
+    barra.append(fecha('desde', 'Desde'), fecha('hasta', 'Hasta'));
+    store.dimsFiltrables.forEach(k => barra.appendChild(selector(k)));
+    barra.appendChild(botonLimpiar(() => store.clearAll()));
+  }
+
+  function pintarChipsIaas() {
+    zonaChips.replaceChildren();
+    for (const [clave, valor] of Object.entries(storeIaas.filters)) {
+      if (valor === null) continue;
+      const chip = document.createElement('button');
+      chip.className = 'chip';
+      chip.type = 'button';
+      const texto = clave === 'desde' ? 'Desde ' + aISO(valor)
+        : clave === 'hasta' ? 'Hasta ' + aISO(valor)
+        : ETIQUETAS_IAAS[clave] + ': ' + opcionesIaas(clave)[valor];
+      chip.textContent = texto + ' ✕';
+      chip.addEventListener('click', () => {
+        const control = barra.querySelector('[data-clave="' + clave + '"]');
+        if (control) control.value = '';
+        storeIaas.clear(clave);
+      });
+      zonaChips.appendChild(chip);
+    }
   }
 
   function pintarChips() {
@@ -1504,6 +1730,9 @@ const app = (() => {
         document.querySelectorAll('.tabs button').forEach(otro =>
           otro.setAttribute('aria-selected', String(otro === b)));
         views.estado.vista = b.dataset.view;
+        construirBarra();
+        if (views.estado.vista === 'iaas') pintarChipsIaas();
+        else pintarChips();
         views.render();
       });
     });
@@ -1512,6 +1741,7 @@ const app = (() => {
   construirBarra();
   pestanas();
   store.onChange(() => { pintarChips(); views.render(); });
+  storeIaas.onChange(() => { pintarChipsIaas(); views.render(); });
   // Repintar los gráficos al cambiar de tema: Chart.js copió los colores
   // al construirse y no vuelve a leer las variables CSS por su cuenta.
   window.addEventListener('themechange', () => views.render());

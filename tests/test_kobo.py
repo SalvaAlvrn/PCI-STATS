@@ -250,3 +250,17 @@ def test_construir_sin_envios_no_revienta():
         data = kobo.construir("t0ken")
     assert data["meta"]["filas"] == 0
     assert data["rows"]["items"] == [[] for _ in range(24)]
+
+
+def test_construir_falla_si_ningun_envio_declara_actividades():
+    """Si nadie declara nada, el emparejamiento de opciones está roto.
+
+    El select_multiple es obligatorio en el formulario, así que 155 envíos
+    con cero actividades no es un dato: es que los nombres de opción dejaron
+    de coincidir. Sin esta guarda, el apartado se publicaría con todas las
+    tarjetas a cero y nadie sabría por qué.
+    """
+    with patch("kobo.descargar",
+               return_value=(esquema_completo(), [envio(prod=""), envio(prod="")])):
+        with pytest.raises(kobo.KoboError, match="actividad"):
+            kobo.construir("t0ken")
