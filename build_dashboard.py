@@ -104,6 +104,18 @@ COLUMNAS_SIN_NULOS = [
     "ESTADO_VALIDACION",
 ]
 
+# Todas las columnas de texto que encode() convierte en dimensión. Un valor
+# con espacios de más al principio o al final es la misma categoría con un
+# disfraz distinto: pandas los trata como dos valores, un responsable real
+# se parte en dos entradas fantasma y sus estadísticas de cumplimiento salen
+# mal en el dashboard sin que nada avise. clean() las despoja de ese
+# disfraz antes de cualquier otra transformación.
+COLUMNAS_TEXTO_DIMENSION = COLUMNAS_SIN_NULOS + [
+    "AREA_ESPECIFICA_APLICACION",
+    "NIVEL_RIESGO",
+    "MOTIVO_NO_CUMPLIMIENTO",
+]
+
 
 # Documento maestro en Google Sheets. No es un secreto: la hoja es de lectura
 # pública y el id ya aparece en la URL que se comparte con el equipo.
@@ -313,6 +325,16 @@ def _nombres_actuales(formularios):
 def clean(registros, formularios, nombres):
     """Normaliza valores y deriva las columnas que el dashboard agrega."""
     df = registros.copy()
+
+    # Strip antes que cualquier otra transformación: para que un slug con
+    # espacios de más siga encontrando su clave en el mapa de nombres, y
+    # para que una celda de solo espacios quede vacía y la capture el
+    # relleno de nulos de más abajo en vez de convertirse en una categoría
+    # " " propia. .str.strip() deja los nulos como nulos (no los convierte
+    # en la cadena "nan"), así que fillna() sigue disparándose igual.
+    for columna in COLUMNAS_TEXTO_DIMENSION:
+        despojado = df[columna].str.strip()
+        df[columna] = despojado.mask(despojado == "", None)
 
     df["RESPONSABLE"] = df["RESPONSABLE"].replace(nombres)
 

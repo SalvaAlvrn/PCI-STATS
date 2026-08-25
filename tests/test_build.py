@@ -159,6 +159,48 @@ def test_clean_sobre_el_excel_real_conserva_todas_las_filas():
     assert limpio["AREA_ESPECIFICA_APLICACION"].isna().sum() == 0
 
 
+def test_clean_colapsa_responsable_con_espacio_final(
+    registros_ok, formularios_ok, nombres_ok
+):
+    # Misma persona que la fila 3 ("Ana Pérez"), pero con un espacio al
+    # final: sin strip(), pandas los trataría como dos responsables
+    # distintos y sus estadísticas se partirían en dos entradas.
+    registros_ok.loc[3, "RESPONSABLE"] = "Ana Pérez "
+    limpio = clean(registros_ok, formularios_ok, nombres_ok)
+    nombres = set(limpio["RESPONSABLE"])
+    assert "Ana Pérez" in nombres
+    assert "Ana Pérez " not in nombres
+    # Filas 0, 2 y 3 son la misma persona ("Ana Pérez" en la fixture base y
+    # la variante con espacio final aquí): las tres deben colapsar a un solo
+    # valor, no partirse en dos responsables distintos.
+    assert (limpio["RESPONSABLE"] == "Ana Pérez").sum() == 3
+
+
+def test_clean_normaliza_slug_con_espacios_alrededor(
+    registros_ok, formularios_ok, nombres_ok
+):
+    registros_ok.loc[1, "RESPONSABLE"] = "  ana_mar_a_p_rez_g_mez  "
+    limpio = clean(registros_ok, formularios_ok, nombres_ok)
+    nombres = set(limpio["RESPONSABLE"])
+    assert "Ana María Pérez Gómez" in nombres
+    assert "  ana_mar_a_p_rez_g_mez  " not in nombres
+    assert "ana_mar_a_p_rez_g_mez" not in nombres
+
+
+def test_clean_area_solo_espacios_cae_en_area_nula(
+    registros_ok, formularios_ok, nombres_ok
+):
+    # Una celda con solo espacios no debe convertirse en su propia categoría
+    # " ": debe quedar vacía tras el strip y caer en el mismo relleno que un
+    # nulo real.
+    registros_ok.loc[3, "AREA_ESPECIFICA_APLICACION"] = "   "
+    limpio = clean(registros_ok, formularios_ok, nombres_ok)
+    assert limpio["AREA_ESPECIFICA_APLICACION"].isna().sum() == 0
+    assert (limpio["AREA_ESPECIFICA_APLICACION"] == AREA_NULA).sum() == 2
+    assert " " not in set(limpio["AREA_ESPECIFICA_APLICACION"])
+    assert "   " not in set(limpio["AREA_ESPECIFICA_APLICACION"])
+
+
 def _tasa(serie):
     """Tasa de cumplimiento sobre los registros con dictamen."""
     con_dictamen = serie[serie.isin(["SI", "NO"])]
