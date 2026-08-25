@@ -327,6 +327,115 @@ function crearAgg(dataset) {
 }
 const agg = crearAgg(DATA);
 </script>
+<script id="mod-iaas">
+/** Agregación del apartado de IAAS.
+ *
+ * Vive aparte de `crearAgg` porque el esquema es distinto: aquí cada envío
+ * tiene N ítems SI/NO y un vector de actividades declaradas, no un único
+ * dictamen. Lo que sí comparte es el criterio: un ítem sin responder no
+ * cuenta en el denominador.
+ */
+function crearIaas(iaas) {
+  const r = iaas.rows;
+  const n = iaas.meta.filas;
+
+  function tasaDe(si, no) {
+    return si + no === 0 ? null : si / (si + no);
+  }
+
+  function filasActivas(f) {
+    const out = [];
+    for (let i = 0; i < n; i++) {
+      if (f.desde !== null && r.dia[i] < f.desde) continue;
+      if (f.hasta !== null && r.dia[i] > f.hasta) continue;
+      if (f.responsable !== null && r.responsable[i] !== f.responsable) continue;
+      if (f.servicio !== null && r.servicio[i] !== f.servicio) continue;
+      if (f.actividad !== null && r.actividades[f.actividad][i] !== 1) continue;
+      out.push(i);
+    }
+    return out;
+  }
+
+  function kpis(filas) {
+    let si = 0, no = 0;
+    for (const i of filas) { si += r.si[i]; no += r.no[i]; }
+    return {registros: filas.length, si, no, respondidos: si + no,
+            tasa: tasaDe(si, no)};
+  }
+
+  function porActividad(filas) {
+    return iaas.actividades.map((label, a) => {
+      const suyos = iaas.items
+        .map((it, j) => (it.actividad === a ? j : -1))
+        .filter(j => j >= 0);
+      let si = 0, no = 0, registros = 0;
+      for (const i of filas) {
+        if (r.actividades[a][i] !== 1) continue;
+        registros++;
+        for (const j of suyos) {
+          const v = r.items[j][i];
+          if (v === 1) si++;
+          else if (v === 0) no++;
+        }
+      }
+      return {idx: a, label, registros, si, no, tasa: tasaDe(si, no)};
+    });
+  }
+
+  function porItem(filas) {
+    const salida = iaas.items.map((it, j) => {
+      let si = 0, no = 0;
+      for (const i of filas) {
+        const v = r.items[j][i];
+        if (v === 1) si++;
+        else if (v === 0) no++;
+      }
+      return {idx: j, titulo: it.titulo,
+              actividad: iaas.actividades[it.actividad],
+              si, no, respondidos: si + no, tasa: tasaDe(si, no)};
+    });
+    // Los incumplimientos primero: es lo que se va a mirar. A igualdad de NO,
+    // manda el volumen respondido.
+    salida.sort((a, b) => b.no - a.no || b.respondidos - a.respondidos);
+    return salida;
+  }
+
+  function porDim(filas, clave) {
+    const etiquetas = iaas.dims[clave];
+    const acc = new Map();
+    for (const i of filas) {
+      const idx = r[clave][i];
+      let e = acc.get(idx);
+      if (!e) {
+        e = {idx, label: etiquetas[idx], registros: 0, si: 0, no: 0};
+        acc.set(idx, e);
+      }
+      e.registros++;
+      e.si += r.si[i];
+      e.no += r.no[i];
+    }
+    const salida = [...acc.values()];
+    for (const e of salida) e.tasa = tasaDe(e.si, e.no);
+    salida.sort((a, b) => a.idx - b.idx);
+    return salida;
+  }
+
+  function series(filas, periodo) {
+    const etiquetas = iaas.dims[periodo];
+    const vol = etiquetas.map(() => 0);
+    const si = etiquetas.map(() => 0);
+    const no = etiquetas.map(() => 0);
+    for (const i of filas) {
+      const k = r[periodo][i];
+      vol[k]++; si[k] += r.si[i]; no[k] += r.no[i];
+    }
+    return {labels: etiquetas, volumen: vol,
+            tasa: etiquetas.map((_, k) => tasaDe(si[k], no[k]))};
+  }
+
+  return {filasActivas, kpis, porActividad, porItem, porDim, series, tasaDe};
+}
+</script>
 <script id="mod-charts">
 const charts = (() => {
   const vivos = new Set();
