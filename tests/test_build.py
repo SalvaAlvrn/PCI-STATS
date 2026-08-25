@@ -6,6 +6,8 @@ import pytest
 
 import requests
 
+import build_dashboard
+import kobo
 from build_dashboard import (
     AREA_NULA,
     BuildError,
@@ -482,3 +484,64 @@ def test_load_con_ruta_sigue_leyendo_el_archivo():
         registros, formularios = load(XLSX)
     get.assert_not_called()
     assert len(registros) == 2806
+
+
+def test_encode_incluye_el_bloque_iaas_que_le_pasan(registros_ok, formularios_ok,
+                                                    nombres_ok):
+    limpio = clean(registros_ok, formularios_ok, nombres_ok)
+    data = encode(limpio, formularios_ok, iaas={"ok": True, "meta": {"filas": 3}})
+    assert data["iaas"]["meta"]["filas"] == 3
+
+
+def test_encode_sin_iaas_deja_el_bloque_con_el_motivo(registros_ok,
+                                                      formularios_ok, nombres_ok):
+    limpio = clean(registros_ok, formularios_ok, nombres_ok)
+    data = encode(limpio, formularios_ok,
+                  iaas={"ok": False, "error": "HTTP 401"})
+    assert data["iaas"]["error"] == "HTTP 401"
+
+
+def test_main_publica_igual_cuando_kobo_falla(libro_real, capsys):
+    """main() no escribe en disco aquí: render_html se sustituye por un espía.
+
+    Llamar a main() de verdad sobreescribiría el dashboard.html del
+    repositorio, que no es cosa de una prueba.
+    """
+    capturado = {}
+
+    def espia(data, template, vendor, salida):
+        capturado["data"] = data
+        return 0
+
+    with patch("build_dashboard.kobo.construir",
+               side_effect=kobo.KoboError("HTTP 401")), \
+         patch("build_dashboard.render_html", side_effect=espia):
+        codigo = build_dashboard.main([str(libro_real)])
+
+    assert codigo == 0
+    assert capturado["data"]["iaas"]["ok"] is False
+    assert capturado["data"]["iaas"]["error"] == "HTTP 401"
+    salida = capsys.readouterr()
+    assert "HTTP 401" in salida.out + salida.err
+
+
+def test_el_html_generado_no_contiene_datos_de_paciente(tmp_path):
+    """La prueba que sostiene la promesa de privacidad del apartado.
+
+    Se construye con un envío sintético cuyos campos personales son cadenas
+    inconfundibles y se comprueba que ninguna sobrevive al HTML.
+    """
+    from test_kobo import envio, esquema_completo
+
+    with patch("kobo.descargar", return_value=(esquema_completo(), [envio()])):
+        iaas = kobo.construir("t0ken")
+    plantilla = tmp_path / "t.html"
+    plantilla.write_text("<html>/*__DATA__*/ /*__CHARTJS__*/</html>", "utf-8")
+    vendor = tmp_path / "chart.js"
+    vendor.write_text("// chart", "utf-8")
+    salida = tmp_path / "d.html"
+    render_html({"iaas": iaas}, plantilla, vendor, salida)
+    html = salida.read_text("utf-8")
+    assert "PACIENTE_SINTETICO_XYZ" not in html
+    assert "EXP-999999" not in html
+    assert "CONCLUSION_SINTETICA_XYZ" not in html

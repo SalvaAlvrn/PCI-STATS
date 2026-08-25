@@ -56,8 +56,21 @@ jobs:
 
       - name: Construir desde el Sheet en vivo
         # Aborta si el documento cambió de forma. La URL conserva entonces
-        # la última versión buena.
-        run: python build_dashboard.py
+        # la última versión buena. KOBO_TOKEN es opcional: si falta o Kobo
+        # falla, el dashboard se publica sin los datos de IAAS y el paso
+        # siguiente marca el run.
+        run: python build_dashboard.py 2> >(tee construccion.err >&2)
+        shell: bash
+        env:
+          KOBO_TOKEN: ${{ secrets.KOBO_TOKEN }}
+
+      - name: Avisar si el apartado de IAAS no se pudo construir
+        if: always()
+        shell: bash
+        run: |
+          if grep -q "^AVISO:" construccion.err 2>/dev/null; then
+            echo "::warning::$(grep '^AVISO:' construccion.err | head -1)"
+          fi
 
       - name: Preparar el sitio
         run: |
