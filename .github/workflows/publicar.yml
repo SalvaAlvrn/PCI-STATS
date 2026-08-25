@@ -1,8 +1,12 @@
 name: Publicar dashboard
 
-# El botón. Aparece como "Run workflow" en la pestaña Actions.
 on:
+  # El botón. Aparece como "Run workflow" en la pestaña Actions.
   workflow_dispatch:
+  # Cada hora en punto. El cron va en UTC y GitHub lo retrasa unos minutos
+  # cuando hay cola, así que la hora exacta no está garantizada.
+  schedule:
+    - cron: '0 * * * *'
 
 # Permisos mínimos para que el job pueda publicar en Pages.
 permissions:

@@ -15,7 +15,14 @@ Configuración única, la primera vez: **Settings → Pages → Source =
 "GitHub Actions"**. Sin esto el workflow se ejecuta pero no tiene dónde
 publicar.
 
-En GitHub, pestaña **Actions** → **Publicar dashboard** → **Run workflow**.
+El workflow se ejecuta solo **cada hora**, así que el dashboard se pone al día
+con el Sheet sin que nadie toque nada. Para forzar una publicación inmediata:
+pestaña **Actions** → **Publicar dashboard** → **Run workflow**.
+
+Dos detalles del horario automático: GitHub retrasa el cron unos minutos cuando
+sus runners tienen cola, y desactiva las ejecuciones programadas tras 60 días sin
+actividad en el repositorio (avisa por correo antes). Un commit cualquiera, o
+pulsar el botón, reinicia esa cuenta.
 
 El workflow lee el Google Sheet en vivo, corre las pruebas, construye y publica.
 Tarda un par de minutos. Si algo falla —el Sheet cambió de forma, una prueba se
