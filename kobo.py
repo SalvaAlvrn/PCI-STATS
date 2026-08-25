@@ -9,6 +9,8 @@ falle o cambie de forma.
 import re
 import unicodedata
 
+import requests
+
 
 class KoboError(Exception):
     """Kobo no respondió, o su formulario ya no tiene la forma esperada.
@@ -118,3 +120,48 @@ def mapa_de_campos(esquema):
             continue
         mapa[normalizar(etiquetas[0])] = "/".join([*grupos, nombre])
     return mapa
+
+
+def _pedir(url, token):
+    try:
+        respuesta = requests.get(
+            url,
+            headers={"Authorization": f"Token {token}"},
+            timeout=TIMEOUT_SEGUNDOS,
+        )
+    except requests.RequestException as error:
+        raise KoboError(f"No se pudo contactar con KoboToolbox: {error}")
+    if respuesta.status_code == 401:
+        raise KoboError(
+            "KoboToolbox respondió 401: el token de KOBO_TOKEN no es válido "
+            "o ha caducado."
+        )
+    if respuesta.status_code != 200:
+        raise KoboError(
+            f"KoboToolbox respondió {respuesta.status_code} al pedir {url}."
+        )
+    try:
+        return respuesta.json()
+    except ValueError as error:
+        raise KoboError(f"KoboToolbox devolvió algo que no es JSON: {error}")
+
+
+def descargar(token, servidor=KOBO_SERVIDOR, uid=KOBO_ASSET_UID):
+    """Devuelve (esquema, envíos). El token nunca aparece en los errores."""
+    if not token:
+        raise KoboError(
+            "Falta el token de la API: define KOBO_TOKEN en el entorno "
+            "(en CI, como secret del repositorio)."
+        )
+    base = f"https://{servidor}/api/v2/assets/{uid}"
+    esquema = _pedir(f"{base}.json", token)
+
+    envios = []
+    url = f"{base}/data.json"
+    # La API pagina los envíos; `next` trae ya formada la URL de la página
+    # siguiente. Se sigue hasta que viene nula.
+    while url:
+        pagina = _pedir(url, token)
+        envios.extend(pagina.get("results", []))
+        url = pagina.get("next")
+    return esquema, envios
