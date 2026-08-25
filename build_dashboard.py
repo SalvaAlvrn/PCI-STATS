@@ -5,6 +5,7 @@ Ver docs/superpowers/specs/2026-08-24-dashboard-supervisiones-design.md
 """
 
 import json
+import os
 import re
 import sys
 import tempfile
@@ -12,6 +13,8 @@ from pathlib import Path
 
 import pandas as pd
 import requests
+
+import kobo
 
 
 class BuildError(Exception):
@@ -392,7 +395,7 @@ DIMENSIONES = {
 }
 
 
-def encode(df, formularios):
+def encode(df, formularios, iaas=None):
     """Codifica el DataFrame limpio en diccionarios + columnas paralelas."""
     dims = {}
     rows = {}
@@ -441,6 +444,9 @@ def encode(df, formularios):
         "dims": dims,
         "forms": forms,
         "rows": rows,
+        # Fuente secundaria: puede venir con datos o con el motivo por el que
+        # no los hay. La pestaña se pinta en los dos casos.
+        "iaas": iaas or {"ok": False, "error": "No se consultó KoboToolbox."},
         # NOMBRE_EVALUADO tiene 2012 valores distintos sobre 2806 filas: el
         # diccionario no comprimiría nada. No es dimensión de agregación.
         "texts": {
@@ -515,7 +521,23 @@ def main(argv=None):
     print(f"Áreas nulas rellenadas como «{AREA_NULA}»: {areas}")
     print(f"Responsables distintos: {limpio['RESPONSABLE'].nunique()}")
 
-    data = encode(limpio, formularios)
+    # Kobo es una fuente secundaria: si falla, el dashboard de supervisiones
+    # se publica igual. El fallo no se esconde —va a stderr y el workflow lo
+    # convierte en una anotación— y la pestaña muestra el motivo.
+    try:
+        iaas = kobo.construir(os.environ.get("KOBO_TOKEN", ""))
+        print(f"IAAS: {iaas['meta']['filas']} envíos, "
+              f"{iaas['meta']['pacientes']} pacientes distintos")
+    except kobo.KoboError as error:
+        iaas = {
+            "ok": False,
+            "error": str(error),
+            "fecha": pd.Timestamp.now(tz="UTC").strftime("%Y-%m-%d %H:%M UTC"),
+        }
+        print(f"AVISO: no se pudo construir el apartado de IAAS: {error}",
+              file=sys.stderr)
+
+    data = encode(limpio, formularios, iaas=iaas)
     escritos = render_html(
         data, raiz / "template.html", raiz / "vendor" / "chart.umd.min.js", salida
     )
