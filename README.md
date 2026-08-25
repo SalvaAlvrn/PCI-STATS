@@ -30,6 +30,35 @@ rompió— el workflow se detiene y **no publica**: la URL sigue mostrando la ú
 versión buena. Es deliberado: el dashboard prefiere estar desactualizado a
 mostrar cifras equivocadas.
 
+## El apartado de investigación de IAAS
+
+La pestaña "Investigación de IAAS" se alimenta del formulario de KoboToolbox
+`aefXsYwJo5RsrZYfaCEcva` en `kf.kobotoolbox.org`, leído en cada ejecución del
+workflow.
+
+Necesita el secret **`KOBO_TOKEN`** (Settings → Secrets and variables →
+Actions) con un token de la API de Kobo. Sin él, o si Kobo no responde, el
+dashboard **se publica igual**: la pestaña muestra el motivo y la hora del
+intento, y el run queda marcado con un aviso en Actions. Nunca se publica un
+dashboard incompleto sin que se sepa por qué.
+
+Del formulario solo se publican fecha, responsable, servicio, actividades
+declaradas y las 24 respuestas SI/NO. El nombre del paciente, el expediente,
+las conclusiones y el responsable de reporte no salen del proceso de
+construcción: `kobo.py` los descarta al cargar, con una lista blanca —lo que
+no está declarado no se publica, así que una pregunta nueva en Kobo no se
+filtra por descuido— y una prueba comprueba que no aparecen en el HTML
+generado.
+
+Los pacientes distintos se muestran como un total del periodo, no como un KPI
+que responda a los filtros: para filtrarlo habría que publicar un
+identificador por fila, y fecha + servicio + responsable basta para
+reidentificar a alguien.
+
+La tasa de cumplimiento es `SI / (SI + NO)` sobre los ítems **respondidos**.
+Un ítem en blanco porque su actividad no se declaró no cuenta como
+incumplimiento, igual que los registros sin dictamen en supervisiones.
+
 ## Generar el dashboard en tu equipo
 
 Una vez, para preparar el entorno:
