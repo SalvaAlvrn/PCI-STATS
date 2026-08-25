@@ -42,22 +42,27 @@ dashboard **se publica igual**: la pestaña muestra el motivo y la hora del
 intento, y el run queda marcado con un aviso en Actions. Nunca se publica un
 dashboard incompleto sin que se sepa por qué.
 
-Del formulario solo se publican fecha, responsable, servicio, actividades
-declaradas y las 24 respuestas SI/NO. El nombre del paciente, el expediente,
-las conclusiones y el responsable de reporte no salen del proceso de
-construcción: `kobo.py` los descarta al cargar, con una lista blanca —lo que
-no está declarado no se publica, así que una pregunta nueva en Kobo no se
-filtra por descuido— y una prueba comprueba que no aparecen en el HTML
-generado.
+El apartado mide **producción, no cumplimiento**: cuántos registros declaran
+cada actividad, por quién, en qué servicio y en qué mes. Destaca las tres
+actividades principales —casos nuevos investigados, casos en seguimiento y
+cierre de casos— con un KPI cada una; las otras tres se monitorean en su
+propia tarjeta, al final.
+
+Las respuestas SI/NO de cada actividad se leen en Kobo pero **no se
+publican**. Consecuencia a tener presente: un `NO` nuevo en el formulario no
+aparecerá en ninguna parte del dashboard.
+
+Del formulario solo se publican fecha, responsable, servicio y actividades
+declaradas. El nombre del paciente, el expediente, las conclusiones y el
+responsable de reporte no salen del proceso de construcción: `kobo.py` los
+descarta al cargar, con una lista blanca —lo que no está declarado no se
+publica, así que una pregunta nueva en Kobo no se filtra por descuido— y una
+prueba comprueba que no aparecen en el HTML generado.
 
 Los pacientes distintos se muestran como un total del periodo, no como un KPI
 que responda a los filtros: para filtrarlo habría que publicar un
 identificador por fila, y fecha + servicio + responsable basta para
 reidentificar a alguien.
-
-La tasa de cumplimiento es `SI / (SI + NO)` sobre los ítems **respondidos**.
-Un ítem en blanco porque su actividad no se declaró no cuenta como
-incumplimiento, igual que los registros sin dictamen en supervisiones.
 
 ## Generar el dashboard en tu equipo
 

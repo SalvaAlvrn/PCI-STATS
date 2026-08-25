@@ -1,7 +1,10 @@
-"""Seguimiento al cumplimiento de la investigación de casos de IAAS.
+"""Seguimiento de la investigación de casos de IAAS.
 
 Lee los envíos del formulario de KoboToolbox y produce el bloque `DATA.iaas`
-que consume el dashboard. Vive aparte de `build_dashboard.py` a propósito: el
+que consume el dashboard: qué actividad declaró cada envío, quién y dónde.
+
+Las respuestas SI/NO de cada actividad se leen en Kobo pero no se publican:
+el apartado mide producción, no cumplimiento. Vive aparte de `build_dashboard.py` a propósito: el
 pipeline de supervisiones no debe cambiar de comportamiento porque esta fuente
 falle o cambie de forma.
 """
@@ -51,35 +54,9 @@ ACTIVIDADES = [
     "ENTREVISTAS REALIZADAS",
 ]
 
-# (actividad, etiqueta del ítem). El orden manda: es el que se publica y el
-# que ve quien lee la tabla de ítems.
-ITEMS = [
-    ("CASOS NUEVOS INVESTIGADOS", "Se realizo investigación de un nuevo caso"),
-    ("CASOS NUEVOS INVESTIGADOS", "La investigación fue iniciada oportunamente"),
-    ("CASOS EN SEGUIMIENTO", "Se realizó seguimiento a los casos programados para el día"),
-    ("CASOS EN SEGUIMIENTO", "Se verificó la evolución clínica del paciente"),
-    ("CASOS EN SEGUIMIENTO", "Se documentó la evolución del caso en el formulario de investigación"),
-    ("CASOS EN SEGUIMIENTO", "Se documentó la evolución clínica y epidemiológica del caso en seguimiento"),
-    ("CIERRE DE CASOS", "Se realizo cierre de caso"),
-    ("CIERRE DE CASOS", "El caso cumple con los criterios establecidos para su cierre"),
-    ("CIERRE DE CASOS", "Se documentó la clasificación final del caso"),
-    ("CIERRE DE CASOS", "Se registró la fecha de cierre de investigación"),
-    ("CIERRE DE CASOS", "El cierre fue documentado conforme a la normativa institucional"),
-    ("SERVICIOS VISITADOS", "Se realizaron las visitas programadas a los servicios"),
-    ("SERVICIOS VISITADOS", "Se verificó el estado clínico del paciente en el área de hospitalización"),
-    ("SERVICIOS VISITADOS", "Se realizaron la visita donde se encuentra ubicado el paciente"),
-    ("SERVICIOS VISITADOS", "Se evaluó el cumplimiento de las medidas de prevención y control de infecciones relacionadas con el caso"),
-    ("EXPEDIENTES REVISADOS", "Se revisó el expediente clínico completo del paciente"),
-    ("EXPEDIENTES REVISADOS", "Se revisaron los factores de riesgo asociados al desarrollo de IAAS"),
-    ("EXPEDIENTES REVISADOS", "Se revisaron los resultados de laboratorio y cultivos microbiológicos disponibles"),
-    ("EXPEDIENTES REVISADOS", "Se revisó el tratamiento antimicrobiano indicado y su evolución"),
-    ("EXPEDIENTES REVISADOS", "La revisión permitió identificar factores de riesgos o hallazgos relevantes"),
-    ("ENTREVISTAS REALIZADAS", "Se entrevistó al paciente o familiar respnsable"),
-    ("ENTREVISTAS REALIZADAS", "Se entrevistó al personal de salud involucrado en la atención del paciente"),
-    ("ENTREVISTAS REALIZADAS", "Se identificaron posibles factores contribuyentes mediante la entrevista"),
-    ("ENTREVISTAS REALIZADAS", "La información obtenida contribuyó a la investigación"),
-]
-
+# Las tres primeras son las actividades que el apartado destaca; las otras
+# tres se monitorean, pero no compiten con ellas por el espacio.
+PRINCIPALES = 3
 
 def normalizar(texto):
     """Etiqueta comparable: sin espacios duros, sin dobles espacios, en minúsculas.
@@ -178,13 +155,6 @@ def descargar(token, servidor=KOBO_SERVIDOR, uid=KOBO_ASSET_UID):
     return esquema, envios
 
 
-# Los envíos traen el nombre de la opción («si»), no su etiqueta («SI»).
-VALORES_ITEM = {"SI": 1, "SÍ": 1, "NO": 0}
-# N/A es «no aplica»: fuera del denominador, igual que un ítem sin responder.
-# Contarlo como incumplimiento castigaría a quien declara que algo no aplicaba.
-VALORES_NO_APLICA = {"N_A", "N/A", "NA"}
-
-
 def _choices_de_actividad(esquema):
     """Etiqueta normalizada → nombre de opción, para «Producción Reportada»."""
     salida = {}
@@ -202,7 +172,7 @@ def validar(esquema):
     puedan acabar usando mapas distintos.
     """
     mapa = mapa_de_campos(esquema)
-    esperadas = [*CAMPOS.values(), *(etiqueta for _, etiqueta in ITEMS)]
+    esperadas = list(CAMPOS.values())
     faltan = [e for e in esperadas if normalizar(e) not in mapa]
     if faltan:
         raise KoboError(
@@ -230,7 +200,6 @@ def limpiar(envios, mapa, choices=None):
     choices = choices or {}
     nombre_actividad = [choices.get(normalizar(a), a) for a in ACTIVIDADES]
     campo = {clave: mapa[normalizar(etiqueta)] for clave, etiqueta in CAMPOS.items()}
-    campos_item = [mapa[normalizar(etiqueta)] for _, etiqueta in ITEMS]
     # El expediente se lee para contar personas distintas y se descarta con el
     # envío: no entra en `filas` ni, por tanto, en el HTML. El nombre del
     # campo sale del mapa, no de una cadena adivinada.
@@ -246,28 +215,11 @@ def limpiar(envios, mapa, choices=None):
                 f"Un envío trae una fecha de registro ilegible: {crudo!r}."
             )
         declaradas = str(envio.get(campo["actividades"], "")).split()
-        items = []
-        for nombre in campos_item:
-            valor = envio.get(nombre)
-            if valor in (None, ""):
-                items.append(None)
-                continue
-            texto = str(valor).strip().upper()
-            if texto in VALORES_NO_APLICA:
-                items.append(None)
-                continue
-            if texto not in VALORES_ITEM:
-                raise KoboError(
-                    f"Un ítem trae un valor no soportado: {texto!r}. Solo se "
-                    "interpretan SI, NO y N/A."
-                )
-            items.append(VALORES_ITEM[texto])
         filas.append({
             "fecha": fecha,
             "responsable": str(envio.get(campo["responsable"], "")).strip(),
             "servicio": str(envio.get(campo["servicio"], "")).strip(),
             "actividades": [1 if n in declaradas else 0 for n in nombre_actividad],
-            "items": items,
         })
         if campo_expediente:
             expediente = str(envio.get(campo_expediente, "")).strip()
@@ -321,18 +273,12 @@ def construir(token, servidor=KOBO_SERVIDOR, uid=KOBO_ASSET_UID):
     rows["actividades"] = [
         [f["actividades"][a] for f in filas] for a in range(len(ACTIVIDADES))
     ]
-    rows["items"] = [[f["items"][j] for f in filas] for j in range(len(ITEMS))]
-    rows["si"] = [sum(1 for v in f["items"] if v == 1) for f in filas]
-    rows["no"] = [sum(1 for v in f["items"] if v == 0) for f in filas]
 
     return {
         "ok": True,
         "dims": dims,
         "actividades": list(ACTIVIDADES),
-        "items": [
-            {"titulo": etiqueta, "actividad": ACTIVIDADES.index(actividad)}
-            for actividad, etiqueta in ITEMS
-        ],
+        "principales": PRINCIPALES,
         "rows": rows,
         "meta": {
             "generado": pd.Timestamp.now(tz="UTC").strftime("%Y-%m-%d %H:%M UTC"),

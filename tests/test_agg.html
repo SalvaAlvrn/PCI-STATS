@@ -266,18 +266,14 @@ const agg = crearAgg(DATA);
 <script id="mod-iaas">
 /** Agregación del apartado de IAAS.
  *
- * Vive aparte de `crearAgg` porque el esquema es distinto: aquí cada envío
- * tiene N ítems SI/NO y un vector de actividades declaradas, no un único
- * dictamen. Lo que sí comparte es el criterio: un ítem sin responder no
- * cuenta en el denominador.
+ * Mide producción: cuántos envíos declararon cada actividad, por quién,
+ * dónde y cuándo. Las respuestas SI/NO del formulario no se publican, así
+ * que aquí no hay tasas — solo recuentos.
  */
 function crearIaas(iaas) {
   const r = iaas.rows;
   const n = iaas.meta.filas;
-
-  function tasaDe(si, no) {
-    return si + no === 0 ? null : si / (si + no);
-  }
+  const nAct = iaas.actividades.length;
 
   function filasActivas(f) {
     const out = [];
@@ -292,48 +288,24 @@ function crearIaas(iaas) {
     return out;
   }
 
+  /** Recuento de envíos que declararon cada actividad. */
+  function cuenta(filas) {
+    const out = new Array(nAct).fill(0);
+    for (const i of filas) {
+      for (let a = 0; a < nAct; a++) if (r.actividades[a][i] === 1) out[a]++;
+    }
+    return out;
+  }
+
   function kpis(filas) {
-    let si = 0, no = 0;
-    for (const i of filas) { si += r.si[i]; no += r.no[i]; }
-    return {registros: filas.length, si, no, respondidos: si + no,
-            tasa: tasaDe(si, no)};
+    return {registros: filas.length, porActividad: cuenta(filas)};
   }
 
   function porActividad(filas) {
-    return iaas.actividades.map((label, a) => {
-      const suyos = iaas.items
-        .map((it, j) => (it.actividad === a ? j : -1))
-        .filter(j => j >= 0);
-      let si = 0, no = 0, registros = 0;
-      for (const i of filas) {
-        if (r.actividades[a][i] !== 1) continue;
-        registros++;
-        for (const j of suyos) {
-          const v = r.items[j][i];
-          if (v === 1) si++;
-          else if (v === 0) no++;
-        }
-      }
-      return {idx: a, label, registros, si, no, tasa: tasaDe(si, no)};
-    });
-  }
-
-  function porItem(filas) {
-    const salida = iaas.items.map((it, j) => {
-      let si = 0, no = 0;
-      for (const i of filas) {
-        const v = r.items[j][i];
-        if (v === 1) si++;
-        else if (v === 0) no++;
-      }
-      return {idx: j, titulo: it.titulo,
-              actividad: iaas.actividades[it.actividad],
-              si, no, respondidos: si + no, tasa: tasaDe(si, no)};
-    });
-    // Los incumplimientos primero: es lo que se va a mirar. A igualdad de NO,
-    // manda el volumen respondido.
-    salida.sort((a, b) => b.no - a.no || b.respondidos - a.respondidos);
-    return salida;
+    const c = cuenta(filas);
+    return iaas.actividades.map((label, a) => ({
+      idx: a, label, registros: c[a], principal: a < iaas.principales
+    }));
   }
 
   function porDim(filas, clave) {
@@ -343,33 +315,34 @@ function crearIaas(iaas) {
       const idx = r[clave][i];
       let e = acc.get(idx);
       if (!e) {
-        e = {idx, label: etiquetas[idx], registros: 0, si: 0, no: 0};
+        e = {idx, label: etiquetas[idx], registros: 0,
+             actividades: new Array(nAct).fill(0)};
         acc.set(idx, e);
       }
       e.registros++;
-      e.si += r.si[i];
-      e.no += r.no[i];
+      for (let a = 0; a < nAct; a++) if (r.actividades[a][i] === 1) e.actividades[a]++;
     }
     const salida = [...acc.values()];
-    for (const e of salida) e.tasa = tasaDe(e.si, e.no);
-    salida.sort((a, b) => a.idx - b.idx);
+    // Quien más produce, arriba. A igualdad de volumen, orden alfabético
+    // para que el listado no baile entre builds.
+    salida.sort((a, b) => b.registros - a.registros ||
+                          a.label.localeCompare(b.label, 'es'));
     return salida;
   }
 
   function series(filas, periodo) {
     const etiquetas = iaas.dims[periodo];
     const vol = etiquetas.map(() => 0);
-    const si = etiquetas.map(() => 0);
-    const no = etiquetas.map(() => 0);
+    const porAct = iaas.actividades.map(() => etiquetas.map(() => 0));
     for (const i of filas) {
       const k = r[periodo][i];
-      vol[k]++; si[k] += r.si[i]; no[k] += r.no[i];
+      vol[k]++;
+      for (let a = 0; a < nAct; a++) if (r.actividades[a][i] === 1) porAct[a][k]++;
     }
-    return {labels: etiquetas, volumen: vol,
-            tasa: etiquetas.map((_, k) => tasaDe(si[k], no[k]))};
+    return {labels: etiquetas, volumen: vol, porActividad: porAct};
   }
 
-  return {filasActivas, kpis, porActividad, porItem, porDim, series, tasaDe};
+  return {filasActivas, kpis, porActividad, porDim, series};
 }
 </script>
 
@@ -429,26 +402,20 @@ check('crearAgg no comparte estado entre instancias',
       aggAlterno.rateBy(todas, 'responsable').length,
       agg.rateBy(todas, 'responsable').length);
 
-// DATA.iaas sintético: 3 envíos, 2 actividades, 3 ítems.
-// Fila 0: si=2 no=0. Fila 1: si=1 no=1. Fila 2: si=0 no=1.
-// Global: 3 SI sobre 5 respondidos.
+// DATA.iaas sintético: 3 envíos, 3 actividades (2 principales).
 const IAAS = {
   ok: true,
   dims: {responsable: ['Ana', 'Beto'], servicio: ['UCI', 'Nefrología'],
          mes: ['2026-07', '2026-08'], semana: ['2026-W30', '2026-W31']},
-  actividades: ['NUEVOS', 'SEGUIMIENTO'],
-  items: [{titulo: 'Item A', actividad: 0}, {titulo: 'Item B', actividad: 0},
-          {titulo: 'Item C', actividad: 1}],
+  actividades: ['NUEVOS', 'SEGUIMIENTO', 'VISITAS'],
+  principales: 2,
   rows: {
     dia:         [20655, 20656, 20690],
     responsable: [0, 1, 0],
     servicio:    [0, 0, 1],
     mes:         [0, 0, 1],
     semana:      [0, 0, 1],
-    actividades: [[1, 1, 0], [0, 0, 1]],
-    items: [[1, 0, null], [1, 1, null], [null, null, 0]],
-    si: [2, 1, 0],
-    no: [0, 1, 1]
+    actividades: [[1, 1, 0], [0, 1, 1], [1, 0, 0]]
   },
   meta: {filas: 3, pacientes: 2, dia_min: 20655, dia_max: 20690}
 };
@@ -461,23 +428,30 @@ check('iaas filasActivas sin filtros', todasIaas, [0, 1, 2]);
 check('iaas filtro por responsable',
       iaas.filasActivas({...sinFiltros, responsable: 0}), [0, 2]);
 check('iaas filtro por actividad usa el booleano de la fila',
-      iaas.filasActivas({...sinFiltros, actividad: 1}), [2]);
+      iaas.filasActivas({...sinFiltros, actividad: 1}), [1, 2]);
 check('iaas filtro por fecha desde',
       iaas.filasActivas({...sinFiltros, desde: 20690}), [2]);
-check('iaas kpis tasa ponderada', iaas.kpis(todasIaas).tasa, 3 / 5);
-check('iaas kpis respondidos', iaas.kpis(todasIaas).respondidos, 5);
-check('iaas porActividad tasa de NUEVOS',
-      iaas.porActividad(todasIaas)[0].tasa, 3 / 4);
-check('iaas porActividad cuenta registros que la declararon',
-      iaas.porActividad(todasIaas)[0].registros, 2);
-check('iaas porItem ordena los incumplimientos primero',
-      iaas.porItem(todasIaas).map(e => e.titulo),
-      ['Item A', 'Item C', 'Item B']);
-check('iaas porItem ignora los no respondidos',
-      iaas.porItem(todasIaas)[2].respondidos, 2);
-check('iaas porDim por servicio',
+
+check('iaas kpis cuenta registros', iaas.kpis(todasIaas).registros, 3);
+check('iaas kpis cuenta cada actividad',
+      iaas.kpis(todasIaas).porActividad, [2, 2, 1]);
+
+check('iaas porActividad devuelve etiqueta y recuento',
+      iaas.porActividad(todasIaas).map(e => [e.label, e.registros]),
+      [['NUEVOS', 2], ['SEGUIMIENTO', 2], ['VISITAS', 1]]);
+check('iaas porActividad marca cuales son principales',
+      iaas.porActividad(todasIaas).map(e => e.principal),
+      [true, true, false]);
+
+check('iaas porDim cuenta por actividad dentro de cada valor',
+      iaas.porDim(todasIaas, 'responsable').map(e => [e.label, e.registros, e.actividades]),
+      [['Ana', 2, [1, 1, 1]], ['Beto', 1, [1, 1, 0]]]);
+check('iaas porDim ordena por registros descendente',
       iaas.porDim(todasIaas, 'servicio').map(e => e.label), ['UCI', 'Nefrología']);
-check('iaas series por mes', iaas.series(todasIaas, 'mes').volumen, [2, 1]);
+
+check('iaas series volumen por mes', iaas.series(todasIaas, 'mes').volumen, [2, 1]);
+check('iaas series una linea por actividad',
+      iaas.series(todasIaas, 'mes').porActividad, [[2, 0], [1, 1], [1, 0]]);
 
 const mes = agg.series(todas, 'mes');
 check('series etiquetas de mes', mes.labels, ['2026-07', '2026-08']);

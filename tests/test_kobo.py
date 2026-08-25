@@ -22,6 +22,28 @@ ESQUEMA_MINIMO = {
 }
 
 
+# Forma real que devuelve la API de Kobo, comprobada contra el formulario en
+# producción: las preguntas no traen `name` sino `$autoname`, los ítems son
+# `score__row` dentro de `begin_score`, y `$xpath` ya da la ruta del envío.
+ESQUEMA_KOBO = {
+    "content": {
+        "survey": [
+            {"type": "date", "$autoname": "Fecha_de_registro",
+             "$xpath": "Fecha_de_registro", "label": ["Fecha de registro"]},
+            {"type": "begin_score", "$autoname": "CASOS_NUEVOS_INVESTIGADOS",
+             "label": ["CASOS NUEVOS INVESTIGADOS"]},
+            {"type": "score__row", "$autoname": "Se_realizo_investiga_i_n",
+             "$xpath": "CASOS_NUEVOS_INVESTIGADOS/Se_realizo_investiga_i_n",
+             "label": ["Se realizo investigación de un nuevo caso"]},
+            {"type": "end_score"},
+            {"type": "select_one", "$autoname": "Sin_xpath",
+             "label": ["Pregunta sin xpath"]},
+        ],
+        "choices": [],
+    }
+}
+
+
 def test_normalizar_colapsa_espacios_duros_y_dobles():
     assert kobo.normalizar("Se  realizó\xa0el cierre ") == "se realizó el cierre"
 
@@ -36,10 +58,34 @@ def test_mapa_de_campos_antepone_el_grupo_al_nombre():
     assert mapa["se realizo investigación de un nuevo caso"] == "grupo1/item_a"
 
 
-def test_manifiesto_declara_seis_actividades_y_veinticuatro_items():
+def test_mapa_de_campos_usa_autoname_cuando_no_hay_name():
+    mapa = kobo.mapa_de_campos(ESQUEMA_KOBO)
+    assert mapa["fecha de registro"] == "Fecha_de_registro"
+
+
+def test_mapa_de_campos_prefiere_el_xpath_de_la_propia_api():
+    mapa = kobo.mapa_de_campos(ESQUEMA_KOBO)
+    assert (mapa["se realizo investigación de un nuevo caso"]
+            == "CASOS_NUEVOS_INVESTIGADOS/Se_realizo_investiga_i_n")
+
+
+def test_mapa_de_campos_sin_xpath_cae_al_autoname():
+    mapa = kobo.mapa_de_campos(ESQUEMA_KOBO)
+    assert mapa["pregunta sin xpath"] == "Sin_xpath"
+
+
+def test_mapa_de_campos_no_confunde_el_grupo_de_puntuacion_con_una_pregunta():
+    """`begin_score` es el contenedor de una actividad, no una pregunta."""
+    mapa = kobo.mapa_de_campos(ESQUEMA_KOBO)
+    assert "casos nuevos investigados" not in mapa
+
+
+def test_manifiesto_declara_seis_actividades_y_tres_principales():
     assert len(kobo.ACTIVIDADES) == 6
-    assert len(kobo.ITEMS) == 24
-    assert {a for a, _ in kobo.ITEMS} == set(kobo.ACTIVIDADES)
+    assert kobo.PRINCIPALES == 3
+    assert kobo.ACTIVIDADES[:3] == ["CASOS NUEVOS INVESTIGADOS",
+                                    "CASOS EN SEGUIMIENTO",
+                                    "CIERRE DE CASOS"]
 
 
 class RespuestaFalsa:
@@ -102,7 +148,12 @@ def test_descargar_convierte_el_fallo_de_red_en_koboerror():
 
 
 def esquema_completo():
-    """Esquema sintético con todas las etiquetas que el manifiesto exige."""
+    """Esquema sintético con las preguntas que el manifiesto exige.
+
+    Incluye un ítem de puntuación aunque el apartado ya no los publique: así
+    se parece a lo que devuelve Kobo y las pruebas de la lista blanca valen
+    para algo.
+    """
     survey = [
         {"type": "date", "name": "fecha", "label": [kobo.CAMPOS["fecha"]]},
         {"type": "select_one", "name": "resp",
@@ -114,9 +165,12 @@ def esquema_completo():
         {"type": "text", "name": "paciente", "label": ["Nombre del paciente"]},
         {"type": "text", "name": "expediente", "label": ["Expediente"]},
         {"type": "text", "name": "conclusiones", "label": ["CONCLUSIONES"]},
+        {"type": "begin_score", "name": "score",
+         "label": ["CASOS NUEVOS INVESTIGADOS"]},
+        {"type": "score__row", "name": "i0",
+         "label": ["Se realizo investigación de un nuevo caso"]},
+        {"type": "end_score"},
     ]
-    for i, (_, etiqueta) in enumerate(kobo.ITEMS):
-        survey.append({"type": "select_one", "name": f"i{i}", "label": [etiqueta]})
     choices = [
         {"list_name": "prod", "name": f"a{i}", "label": [a]}
         for i, a in enumerate(kobo.ACTIVIDADES)
@@ -130,8 +184,7 @@ def envio(**extra):
         "resp": "Ana Investigadora",
         "serv": "Nefrología",
         "prod": "a0",
-        "i0": "SI",
-        "i1": "NO",
+        "score/i0": "si",
         "paciente": "PACIENTE_SINTETICO_XYZ",
         "expediente": "EXP-999999",
         "conclusiones": "CONCLUSION_SINTETICA_XYZ",
@@ -157,9 +210,30 @@ def test_validar_nombra_la_etiqueta_que_falta():
     esquema = esquema_completo()
     esquema["content"]["survey"] = [
         c for c in esquema["content"]["survey"]
-        if c["label"][0] != kobo.ITEMS[3][1]
+        if c.get("label", [""])[0] != kobo.CAMPOS["servicio"]
     ]
-    with pytest.raises(kobo.KoboError, match=re.escape(kobo.ITEMS[3][1][:25])):
+    with pytest.raises(kobo.KoboError,
+                       match=re.escape(kobo.CAMPOS["servicio"][:25])):
+        kobo.validar(esquema)
+
+
+def test_validar_no_exige_las_preguntas_de_los_items():
+    """El apartado no publica las respuestas SI/NO, así que no las valida.
+
+    Eran 24 etiquetas de texto libre en el manifiesto: cada una, una manera
+    de romper el apartado por reescribir una pregunta en Kobo.
+    """
+    esquema = esquema_completo()
+    esquema["content"]["survey"] = [
+        c for c in esquema["content"]["survey"] if c.get("type") != "score__row"
+    ]
+    assert kobo.validar(esquema)
+
+
+def test_validar_exige_las_seis_opciones_de_produccion():
+    esquema = esquema_completo()
+    esquema["content"]["choices"] = esquema["content"]["choices"][:4]
+    with pytest.raises(kobo.KoboError, match="Producción Reportada"):
         kobo.validar(esquema)
 
 
@@ -170,20 +244,17 @@ def test_limpiar_no_conserva_ningun_campo_prohibido():
     assert "EXP-999999" not in texto
     assert "CONCLUSION_SINTETICA_XYZ" not in texto
     assert "uuid-1" not in texto
-    assert set(filas[0]) == {"fecha", "responsable", "servicio",
-                             "actividades", "items"}
+    assert set(filas[0]) == {"fecha", "responsable", "servicio", "actividades"}
+
+
+def test_limpiar_no_publica_las_respuestas_si_no():
+    filas, _ = limpiar_con(esquema_completo(), [envio()])
+    assert "items" not in filas[0]
 
 
 def test_limpiar_marca_solo_las_actividades_declaradas():
     filas, _ = limpiar_con(esquema_completo(), [envio(prod="a0 a2")])
     assert filas[0]["actividades"] == [1, 0, 1, 0, 0, 0]
-
-
-def test_limpiar_deja_en_none_los_items_sin_responder():
-    filas, _ = limpiar_con(esquema_completo(), [envio()])
-    assert filas[0]["items"][0] == 1
-    assert filas[0]["items"][1] == 0
-    assert filas[0]["items"][2] is None
 
 
 def test_limpiar_cuenta_pacientes_distintos_sin_publicarlos():
@@ -193,31 +264,34 @@ def test_limpiar_cuenta_pacientes_distintos_sin_publicarlos():
     assert "'A'" not in repr(filas)
 
 
-def test_limpiar_rechaza_un_valor_desconocido_en_un_item():
-    with pytest.raises(kobo.KoboError, match="QUIZÁS"):
-        limpiar_con(esquema_completo(), [envio(i0="QUIZÁS")])
-
-
 def test_limpiar_rechaza_una_fecha_ilegible():
     with pytest.raises(kobo.KoboError, match="ayer"):
         limpiar_con(esquema_completo(), [envio(fecha="ayer")])
 
 
-def test_construir_devuelve_columnas_paralelas_por_item():
-    with patch("kobo.descargar",
-               return_value=(esquema_completo(), [envio(), envio(i0="NO")])):
+def test_construir_devuelve_una_columna_por_actividad():
+    envios = [envio(prod="a0"), envio(prod="a0 a2"), envio(prod="a1")]
+    with patch("kobo.descargar", return_value=(esquema_completo(), envios)):
         data = kobo.construir("t0ken")
     assert data["ok"] is True
-    assert len(data["rows"]["items"]) == 24
-    assert data["rows"]["items"][0] == [1, 0]
+    assert len(data["rows"]["actividades"]) == 6
+    assert data["rows"]["actividades"][0] == [1, 1, 0]
+    assert data["rows"]["actividades"][2] == [0, 1, 0]
 
 
-def test_construir_cuenta_si_y_no_por_envio():
+def test_construir_no_publica_items_ni_tasas():
     with patch("kobo.descargar", return_value=(esquema_completo(), [envio()])):
         data = kobo.construir("t0ken")
-    # El envío sintético responde i0=SI e i1=NO; el resto queda sin responder.
-    assert data["rows"]["si"] == [1]
-    assert data["rows"]["no"] == [1]
+    assert "items" not in data
+    assert "items" not in data["rows"]
+    assert "si" not in data["rows"]
+    assert "no" not in data["rows"]
+
+
+def test_construir_declara_cuantas_actividades_son_principales():
+    with patch("kobo.descargar", return_value=(esquema_completo(), [envio()])):
+        data = kobo.construir("t0ken")
+    assert data["principales"] == 3
 
 
 def test_construir_ordena_las_dimensiones_alfabeticamente():
@@ -249,80 +323,18 @@ def test_construir_sin_envios_no_revienta():
     with patch("kobo.descargar", return_value=(esquema_completo(), [])):
         data = kobo.construir("t0ken")
     assert data["meta"]["filas"] == 0
-    assert data["rows"]["items"] == [[] for _ in range(24)]
+    assert data["rows"]["actividades"] == [[] for _ in range(6)]
 
 
 def test_construir_falla_si_ningun_envio_declara_actividades():
     """Si nadie declara nada, el emparejamiento de opciones está roto.
 
-    El select_multiple es obligatorio en el formulario, así que 155 envíos
-    con cero actividades no es un dato: es que los nombres de opción dejaron
-    de coincidir. Sin esta guarda, el apartado se publicaría con todas las
-    tarjetas a cero y nadie sabría por qué.
+    El select_multiple es obligatorio en el formulario, así que un lote de
+    envíos con cero actividades no es un dato: es que los nombres de opción
+    dejaron de coincidir. Sin esta guarda, el apartado se publicaría con
+    todas las tarjetas a cero y nadie sabría por qué.
     """
     with patch("kobo.descargar",
                return_value=(esquema_completo(), [envio(prod=""), envio(prod="")])):
         with pytest.raises(kobo.KoboError, match="actividad"):
             kobo.construir("t0ken")
-
-
-# Forma real que devuelve la API de Kobo, comprobada contra el formulario en
-# producción: las preguntas no traen `name` sino `$autoname`, los ítems son
-# `score__row` dentro de `begin_score`, y `$xpath` ya da la ruta del envío.
-ESQUEMA_KOBO = {
-    "content": {
-        "survey": [
-            {"type": "date", "$autoname": "Fecha_de_registro",
-             "$xpath": "Fecha_de_registro", "label": ["Fecha de registro"]},
-            {"type": "begin_score", "$autoname": "CASOS_NUEVOS_INVESTIGADOS",
-             "label": ["CASOS NUEVOS INVESTIGADOS"]},
-            {"type": "score__row", "$autoname": "Se_realizo_investiga_i_n",
-             "$xpath": "CASOS_NUEVOS_INVESTIGADOS/Se_realizo_investiga_i_n",
-             "label": ["Se realizo investigación de un nuevo caso"]},
-            {"type": "end_score"},
-            {"type": "select_one", "$autoname": "Sin_xpath",
-             "label": ["Pregunta sin xpath"]},
-        ],
-        "choices": [],
-    }
-}
-
-
-def test_mapa_de_campos_usa_autoname_cuando_no_hay_name():
-    mapa = kobo.mapa_de_campos(ESQUEMA_KOBO)
-    assert mapa["fecha de registro"] == "Fecha_de_registro"
-
-
-def test_mapa_de_campos_prefiere_el_xpath_de_la_propia_api():
-    mapa = kobo.mapa_de_campos(ESQUEMA_KOBO)
-    assert (mapa["se realizo investigación de un nuevo caso"]
-            == "CASOS_NUEVOS_INVESTIGADOS/Se_realizo_investiga_i_n")
-
-
-def test_mapa_de_campos_sin_xpath_cae_al_autoname():
-    mapa = kobo.mapa_de_campos(ESQUEMA_KOBO)
-    assert mapa["pregunta sin xpath"] == "Sin_xpath"
-
-
-def test_mapa_de_campos_no_confunde_el_grupo_de_puntuacion_con_una_pregunta():
-    """`begin_score` es el contenedor de una actividad, no un ítem."""
-    mapa = kobo.mapa_de_campos(ESQUEMA_KOBO)
-    assert "casos nuevos investigados" not in mapa
-
-
-def test_limpiar_trata_n_a_como_no_aplica_y_no_como_incumplimiento():
-    """El formulario ofrece SI, NO y N/A; el export solo tenía SI y NO.
-
-    N/A es «no aplica»: queda fuera del denominador, igual que un ítem sin
-    responder. Contarlo como NO castigaría a quien declara honestamente que
-    algo no aplicaba.
-    """
-    filas, _ = limpiar_con(esquema_completo(), [envio(i0="n_a")])
-    assert filas[0]["items"][0] is None
-
-
-def test_limpiar_acepta_los_nombres_de_opcion_en_minuscula():
-    """La API devuelve el nombre de la opción («si»), no su etiqueta («SI»)."""
-    filas, _ = limpiar_con(esquema_completo(), [envio(i0="si", i1="no")])
-    assert filas[0]["items"][0] == 1
-    assert filas[0]["items"][1] == 0

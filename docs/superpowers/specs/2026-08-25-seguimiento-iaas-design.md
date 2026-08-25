@@ -5,6 +5,24 @@ Estado: aprobado en brainstorming, pendiente de plan de implementación
 Diseños previos: `2026-08-24-dashboard-supervisiones-design.md`,
 `2026-08-24-publicacion-y-datos-en-vivo-design.md`
 
+## 0. Cambio del 2026-08-25, posterior a la primera publicación
+
+El apartado se diseñó midiendo cumplimiento y producción. Con el apartado ya
+en producción se decidió **quitar el cumplimiento por completo**: las
+respuestas SI/NO se siguen leyendo de Kobo pero no se publican, y el apartado
+mide solo producción, destacando tres actividades —casos nuevos investigados,
+casos en seguimiento y cierre de casos— sobre las otras tres.
+
+Qué queda obsoleto de este documento: la sección 5 (la métrica de
+cumplimiento), las tarjetas 2, 3 y 6 de la sección 7, y la referencia a los 24
+ítems en la sección 4 —el manifiesto ya no los declara, lo que de paso quita
+del módulo 24 etiquetas de texto libre que podían romperlo al reescribir una
+pregunta en Kobo—. Lo demás sigue vigente, incluida la sección 4 en todo lo
+relativo a la privacidad.
+
+Consecuencia asumida al decidirlo: un `NO` nuevo en el formulario no aparece
+en ninguna parte del dashboard.
+
 ## 1. Propósito
 
 El equipo llena en KoboToolbox un formulario de seguimiento al cumplimiento de
