@@ -17,6 +17,7 @@
   --border:         rgba(11,11,11,0.10);
   --series-1:       #2a78d6;
   --series-2:       #eb6834;
+  --series-3:       #1f8f68;
   --context:        #c3c2b7;
   --good:           #0ca30c;
   --critical:       #d03b3b;
@@ -32,7 +33,8 @@
     --plane: #0d0d0d; --surface: #1a1a19;
     --text-primary: #ffffff; --text-secondary: #c3c2b7; --text-muted: #898781;
     --grid: #2c2c2a; --axis: #383835; --border: rgba(255,255,255,0.10);
-    --series-1: #3987e5; --series-2: #d95926; --context: #52514e;
+    --series-1: #3987e5; --series-2: #d95926; --series-3: #35b184;
+    --context: #52514e;
   }
 }
 :root[data-theme="dark"] {
@@ -40,7 +42,8 @@
   --plane: #0d0d0d; --surface: #1a1a19;
   --text-primary: #ffffff; --text-secondary: #c3c2b7; --text-muted: #898781;
   --grid: #2c2c2a; --axis: #383835; --border: rgba(255,255,255,0.10);
-  --series-1: #3987e5; --series-2: #d95926; --context: #52514e;
+  --series-1: #3987e5; --series-2: #d95926; --series-3: #35b184;
+  --context: #52514e;
 }
 
 * { box-sizing: border-box; }
@@ -352,18 +355,14 @@ const agg = crearAgg(DATA);
 <script id="mod-iaas">
 /** Agregación del apartado de IAAS.
  *
- * Vive aparte de `crearAgg` porque el esquema es distinto: aquí cada envío
- * tiene N ítems SI/NO y un vector de actividades declaradas, no un único
- * dictamen. Lo que sí comparte es el criterio: un ítem sin responder no
- * cuenta en el denominador.
+ * Mide producción: cuántos envíos declararon cada actividad, por quién,
+ * dónde y cuándo. Las respuestas SI/NO del formulario no se publican, así
+ * que aquí no hay tasas — solo recuentos.
  */
 function crearIaas(iaas) {
   const r = iaas.rows;
   const n = iaas.meta.filas;
-
-  function tasaDe(si, no) {
-    return si + no === 0 ? null : si / (si + no);
-  }
+  const nAct = iaas.actividades.length;
 
   function filasActivas(f) {
     const out = [];
@@ -378,48 +377,24 @@ function crearIaas(iaas) {
     return out;
   }
 
+  /** Recuento de envíos que declararon cada actividad. */
+  function cuenta(filas) {
+    const out = new Array(nAct).fill(0);
+    for (const i of filas) {
+      for (let a = 0; a < nAct; a++) if (r.actividades[a][i] === 1) out[a]++;
+    }
+    return out;
+  }
+
   function kpis(filas) {
-    let si = 0, no = 0;
-    for (const i of filas) { si += r.si[i]; no += r.no[i]; }
-    return {registros: filas.length, si, no, respondidos: si + no,
-            tasa: tasaDe(si, no)};
+    return {registros: filas.length, porActividad: cuenta(filas)};
   }
 
   function porActividad(filas) {
-    return iaas.actividades.map((label, a) => {
-      const suyos = iaas.items
-        .map((it, j) => (it.actividad === a ? j : -1))
-        .filter(j => j >= 0);
-      let si = 0, no = 0, registros = 0;
-      for (const i of filas) {
-        if (r.actividades[a][i] !== 1) continue;
-        registros++;
-        for (const j of suyos) {
-          const v = r.items[j][i];
-          if (v === 1) si++;
-          else if (v === 0) no++;
-        }
-      }
-      return {idx: a, label, registros, si, no, tasa: tasaDe(si, no)};
-    });
-  }
-
-  function porItem(filas) {
-    const salida = iaas.items.map((it, j) => {
-      let si = 0, no = 0;
-      for (const i of filas) {
-        const v = r.items[j][i];
-        if (v === 1) si++;
-        else if (v === 0) no++;
-      }
-      return {idx: j, titulo: it.titulo,
-              actividad: iaas.actividades[it.actividad],
-              si, no, respondidos: si + no, tasa: tasaDe(si, no)};
-    });
-    // Los incumplimientos primero: es lo que se va a mirar. A igualdad de NO,
-    // manda el volumen respondido.
-    salida.sort((a, b) => b.no - a.no || b.respondidos - a.respondidos);
-    return salida;
+    const c = cuenta(filas);
+    return iaas.actividades.map((label, a) => ({
+      idx: a, label, registros: c[a], principal: a < iaas.principales
+    }));
   }
 
   function porDim(filas, clave) {
@@ -429,33 +404,34 @@ function crearIaas(iaas) {
       const idx = r[clave][i];
       let e = acc.get(idx);
       if (!e) {
-        e = {idx, label: etiquetas[idx], registros: 0, si: 0, no: 0};
+        e = {idx, label: etiquetas[idx], registros: 0,
+             actividades: new Array(nAct).fill(0)};
         acc.set(idx, e);
       }
       e.registros++;
-      e.si += r.si[i];
-      e.no += r.no[i];
+      for (let a = 0; a < nAct; a++) if (r.actividades[a][i] === 1) e.actividades[a]++;
     }
     const salida = [...acc.values()];
-    for (const e of salida) e.tasa = tasaDe(e.si, e.no);
-    salida.sort((a, b) => a.idx - b.idx);
+    // Quien más produce, arriba. A igualdad de volumen, orden alfabético
+    // para que el listado no baile entre builds.
+    salida.sort((a, b) => b.registros - a.registros ||
+                          a.label.localeCompare(b.label, 'es'));
     return salida;
   }
 
   function series(filas, periodo) {
     const etiquetas = iaas.dims[periodo];
     const vol = etiquetas.map(() => 0);
-    const si = etiquetas.map(() => 0);
-    const no = etiquetas.map(() => 0);
+    const porAct = iaas.actividades.map(() => etiquetas.map(() => 0));
     for (const i of filas) {
       const k = r[periodo][i];
-      vol[k]++; si[k] += r.si[i]; no[k] += r.no[i];
+      vol[k]++;
+      for (let a = 0; a < nAct; a++) if (r.actividades[a][i] === 1) porAct[a][k]++;
     }
-    return {labels: etiquetas, volumen: vol,
-            tasa: etiquetas.map((_, k) => tasaDe(si[k], no[k]))};
+    return {labels: etiquetas, volumen: vol, porActividad: porAct};
   }
 
-  return {filasActivas, kpis, porActividad, porItem, porDim, series, tasaDe};
+  return {filasActivas, kpis, porActividad, porDim, series};
 }
 </script>
 <script id="mod-charts">
@@ -1220,6 +1196,14 @@ const views = (() => {
     contenedor.appendChild(tForm);
   }
 
+  /** «CASOS NUEVOS INVESTIGADOS» -> «Casos nuevos investigados».
+   *
+   * Kobo guarda las actividades en mayúsculas; en un KPI o una cabecera de
+   * tabla eso grita y además ocupa más de lo que cabe.
+   */
+  const TITULO_ACTIVIDAD = etiqueta =>
+    etiqueta.charAt(0) + etiqueta.slice(1).toLowerCase();
+
   function renderIaas() {
     if (!DATA.iaas.ok) {
       // La pestaña sigue existiendo y dice por qué no hay datos: si
@@ -1234,17 +1218,20 @@ const views = (() => {
       contenedor.appendChild(vacio('Sin registros para estos filtros.'));
       return;
     }
+    const acts = DATA.iaas.actividades;
+    const nPrin = DATA.iaas.principales;
     const k = iaas.kpis(filas);
 
+    // Las tres principales, cada una con su KPI. Las demás se monitorean más
+    // abajo: siguen visibles, pero no compiten por la primera pantalla.
     const fila = document.createElement('div');
     fila.className = 'kpis';
     fila.style.marginBottom = '16px';
-    fila.append(
-      kpi('Registros', charts.num(k.registros)),
-      kpi('Cumplimiento', charts.pct(k.tasa)),
-      kpi('Ítems respondidos', charts.num(k.respondidos)),
-      kpi('Ítems en NO', charts.num(k.no))
-    );
+    fila.appendChild(kpi('Registros', charts.num(k.registros)));
+    for (let a = 0; a < nPrin; a++) {
+      fila.appendChild(kpi(TITULO_ACTIVIDAD(acts[a]),
+                           charts.num(k.porActividad[a])));
+    }
     contenedor.appendChild(fila);
 
     // Los pacientes distintos no son filtrables: contarlos por filtro
@@ -1258,85 +1245,93 @@ const views = (() => {
     contenedor.appendChild(nota);
 
     const porAct = iaas.porActividad(filas);
-    const tAct = card('Cumplimiento por actividad', null);
+    const tAct = card('Producción por actividad',
+                      'Cuántos registros declararon cada actividad.');
     conTabla(tAct,
-      [{titulo: 'Actividad'}, {titulo: 'Registros', num: true, formato: charts.num},
-       {titulo: 'Tasa', num: true, formato: charts.pct}],
-      porAct.map(e => [e.label, e.registros, e.tasa]),
+      [{titulo: 'Actividad'}, {titulo: 'Registros', num: true, formato: charts.num}],
+      porAct.map(e => [e.label, e.registros]),
       zona => {
         const caja = document.createElement('div');
         caja.className = 'plot';
-        caja.style.height = Math.max(140, porAct.length * 24 + 40) + 'px';
+        caja.style.height = Math.max(140, porAct.length * 26 + 40) + 'px';
         const lienzo = document.createElement('canvas');
         caja.appendChild(lienzo);
         zona.appendChild(caja);
         charts.bars(lienzo, {
-          labels: porAct.map(e => `${e.label} (${e.registros})`),
-          values: porAct.map(e => e.tasa),
-          extra: porAct.map(e => `${e.si} de ${e.si + e.no} ítems respondidos`),
-          formato: charts.pct
+          labels: porAct.map(e => e.label),
+          values: porAct.map(e => e.registros),
+          formato: charts.num
         });
       });
     contenedor.appendChild(tAct);
 
-    const porIt = iaas.porItem(filas);
-    const sumaIt = agg.totalDe(
-      porIt.map(e => ({si: e.si, no: e.no, total: e.respondidos})));
-    // totalDe devuelve {n, total, tasa}; el recuento de NO se suma aparte.
-    const noIt = porIt.reduce((a, e) => a + e.no, 0);
-    const tItems = card('Ítems',
-      'Ordenados por incumplimientos: lo que hay que mirar va arriba.');
-    charts.tabla(zonaDe(tItems),
-      [{titulo: 'Ítem'}, {titulo: 'Actividad'},
-       {titulo: 'Respondidos', num: true, formato: charts.num},
-       {titulo: 'NO', num: true, formato: charts.num},
-       {titulo: 'Tasa', num: true, formato: charts.pct}],
-      porIt.map(e => [e.titulo, e.actividad, e.respondidos, e.no, e.tasa]),
-      {total: [`Total (${porIt.length} ítems)`, '', sumaIt.total,
-               noIt, sumaIt.tasa]});
-    contenedor.appendChild(tItems);
-
-    const tProd = card('Producción por actividad',
-                       'Cuántos registros declararon cada actividad.');
-    conTabla(tProd,
-      [{titulo: 'Actividad'}, {titulo: 'Registros', num: true, formato: charts.num}],
-      porAct.map(e => [e.label, e.registros]),
-      zona => charts.columns(plot(zona, 'i-prod'), {
-        labels: porAct.map(e => e.label),
-        values: porAct.map(e => e.registros),
-        formato: charts.num
+    // Evolución mensual: una línea por actividad principal. Es la tarjeta
+    // que responde "¿esto sube o baja?".
+    const s = iaas.series(filas, 'mes');
+    const tEvo = card('Evolución mensual',
+                      'Las tres actividades principales, mes a mes.');
+    const columnas = [{titulo: 'Mes'}];
+    for (let a = 0; a < nPrin; a++) {
+      columnas.push({titulo: TITULO_ACTIVIDAD(acts[a]), num: true,
+                     formato: charts.num});
+    }
+    conTabla(tEvo, columnas,
+      s.labels.map((l, i) => {
+        const f = [l];
+        for (let a = 0; a < nPrin; a++) f.push(s.porActividad[a][i]);
+        return f;
+      }),
+      zona => charts.line(plot(zona, 'i-evo'), {
+        labels: s.labels,
+        formato: charts.num,
+        series: acts.slice(0, nPrin).map((label, a) => ({
+          label,
+          data: s.porActividad[a],
+          color: charts.token('series-' + (a + 1))
+        }))
       }));
-    contenedor.appendChild(tProd);
+    contenedor.appendChild(tEvo);
 
-    const rejilla = document.createElement('div');
-    rejilla.className = 'grid-2';
     for (const [clave, titulo] of [['responsable', 'Por responsable'],
                                    ['servicio', 'Por servicio']]) {
       const datos = iaas.porDim(filas, clave);
-      const suma = agg.totalDe(
-        datos.map(e => ({si: e.si, no: e.no, total: e.registros})));
       const tarjeta = card(titulo, null);
-      charts.tabla(zonaDe(tarjeta),
-        [{titulo}, {titulo: 'Registros', num: true, formato: charts.num},
-         {titulo: 'Tasa', num: true, formato: charts.pct}],
-        datos.map(e => [e.label, e.registros, e.tasa]),
-        {total: [`Total (${suma.n})`, suma.total, suma.tasa]});
-      rejilla.appendChild(tarjeta);
+      const cols = [{titulo: clave === 'responsable' ? 'Responsable' : 'Servicio'},
+                    {titulo: 'Registros', num: true, formato: charts.num}];
+      for (let a = 0; a < nPrin; a++) {
+        cols.push({titulo: TITULO_ACTIVIDAD(acts[a]), num: true,
+                   formato: charts.num});
+      }
+      const total = ['Total (' + datos.length + ')',
+                     datos.reduce((x, e) => x + e.registros, 0)];
+      for (let a = 0; a < nPrin; a++) {
+        total.push(datos.reduce((x, e) => x + e.actividades[a], 0));
+      }
+      charts.tabla(zonaDe(tarjeta), cols,
+        datos.map(e => [e.label, e.registros,
+                        ...e.actividades.slice(0, nPrin)]),
+        {total});
+      contenedor.appendChild(tarjeta);
     }
-    contenedor.appendChild(rejilla);
 
-    const s = iaas.series(filas, 'mes');
-    const tEvo = card('Evolución mensual', null);
-    conTabla(tEvo,
-      [{titulo: 'Mes'}, {titulo: 'Registros', num: true, formato: charts.num},
-       {titulo: 'Tasa', num: true, formato: charts.pct}],
-      s.labels.map((l, i) => [l, s.volumen[i], s.tasa[i]]),
-      zona => charts.line(plot(zona, 'i-evo'), {
-        labels: s.labels,
-        series: [{label: 'Cumplimiento', data: s.tasa,
-                  color: charts.token('series-1')}]
-      }));
-    contenedor.appendChild(tEvo);
+    // Las actividades secundarias, por responsable: se monitorean, pero
+    // aparte de las tres que mandan.
+    const secundarias = acts.slice(nPrin);
+    if (secundarias.length) {
+      const datos = iaas.porDim(filas, 'responsable');
+      const tOtras = card('Otras actividades',
+                          'Se monitorean, pero no son las principales.');
+      const cols = [{titulo: 'Responsable'}];
+      secundarias.forEach(label => cols.push({titulo: TITULO_ACTIVIDAD(label),
+                                              num: true, formato: charts.num}));
+      const total = ['Total (' + datos.length + ')'];
+      secundarias.forEach((_, j) => total.push(
+        datos.reduce((x, e) => x + e.actividades[nPrin + j], 0)));
+      charts.tabla(zonaDe(tOtras), cols,
+        datos.map(e => [e.label, ...e.actividades.slice(nPrin)]),
+        {total});
+      contenedor.appendChild(tOtras);
+    }
   }
 
   function irA(vista, clave) {
