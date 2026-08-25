@@ -138,8 +138,9 @@ Este paso queda **fuera de este diseño**, como trabajo de seguimiento.
 
 ### 6.3 Ajustes
 
-- `KOBO_SERVIDOR = "kf.kobotoolbox.org"` y el asset uid, constantes en
-  `kobo.py`. El uid no es una credencial: sin token no sirve.
+- `KOBO_SERVIDOR = "kf.kobotoolbox.org"` y
+  `KOBO_ASSET_UID = "aefXsYwJo5RsrZYfaCEcva"`, constantes en `kobo.py`. El uid
+  no es una credencial: sin token no sirve.
 - El token se lee solo del entorno (`KOBO_TOKEN`), nunca del árbol de trabajo.
 - En el workflow, un secret `KOBO_TOKEN` pasado como variable de entorno al
   paso de construcción.
@@ -215,5 +216,6 @@ Ninguna toca la red, como el resto de la suite.
 
 ## 11. Pendiente antes de implementar
 
-- El **asset uid** del formulario en Kobo.
 - El secret `KOBO_TOKEN` creado en Settings → Secrets and variables → Actions.
+  Sin él, el módulo se puede escribir y probar entero contra respuestas
+  sintéticas, pero la primera ejecución real no puede correr.
