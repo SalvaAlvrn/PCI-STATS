@@ -1,4 +1,4 @@
 pandas==3.0.3
-openpyxl
+openpyxl==3.1.5
 requests==2.34.0
 pytest==9.1.1

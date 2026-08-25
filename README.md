@@ -1,6 +1,7 @@
 # PCI-STATS — Dashboard de supervisiones
 
-Genera un dashboard HTML interactivo y autocontenido a partir de `SupPCI.xlsx`.
+Genera un dashboard HTML interactivo y autocontenido a partir del Google Sheet
+en vivo (o, para desarrollo local, de un export `.xlsx`).
 
 ## Ver el dashboard
 
@@ -9,6 +10,10 @@ Genera un dashboard HTML interactivo y autocontenido a partir de `SupPCI.xlsx`.
 El enlace es fijo. Se comparte una vez y no cambia.
 
 ## Actualizar los datos publicados
+
+Configuración única, la primera vez: **Settings → Pages → Source =
+"GitHub Actions"**. Sin esto el workflow se ejecuta pero no tiene dónde
+publicar.
 
 En GitHub, pestaña **Actions** → **Publicar dashboard** → **Run workflow**.
 
@@ -77,6 +82,14 @@ como incumplimiento.
 ## Pruebas
 
     python -m pytest tests/ -v
+
+`SupPCI.xlsx` es opcional: es un export local del Sheet, no está versionado y
+solo sirve como comodidad para desarrollo. Si no lo tienes, un puñado de
+pruebas que pinchan cifras exactas de ese archivo concreto se muestran como
+`SKIPPED` — es lo esperado, no un fallo. El resto de la suite (incluidas las
+tres cifras de control y las pruebas de `render_html`) sigue corriendo igual,
+usando el Sheet en vivo la primera vez que hace falta un libro real, así que
+sigue cubriendo el pipeline completo.
 
 Y abrir `tests/test_agg.html` en el navegador para las pruebas de agregación.
 

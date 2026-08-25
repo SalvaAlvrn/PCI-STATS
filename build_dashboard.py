@@ -1,4 +1,4 @@
-"""Genera dashboard.html a partir de SupPCI.xlsx.
+"""Genera dashboard.html a partir del Google Sheet en vivo (o de un export local).
 
 Pipeline: load -> validate -> clean -> encode -> render_html.
 Ver docs/superpowers/specs/2026-08-24-dashboard-supervisiones-design.md
@@ -63,6 +63,20 @@ def cargar_nombres(ruta=RUTA_NOMBRES):
             f"{ruta} debe ser un objeto cuyas claves y valores sean todos "
             "cadenas de texto"
         )
+    # Un typo al escribir el secret puede hacer que dos slugs distintos
+    # apunten al mismo nombre. Antes eso pasaba desapercibido: dos
+    # responsables se fusionaban en uno y sus tasas de cumplimiento salían
+    # mal sin ningún error. Ahora ya no es código bajo revisión, es un
+    # secret que nadie diffea, así que el build lo comprueba.
+    vistos = {}
+    for slug, nombre in mapa.items():
+        if nombre in vistos:
+            raise BuildError(
+                f"{ruta} mapea más de un slug al mismo nombre "
+                f"«{nombre}»: {vistos[nombre]!r} y {slug!r}. Un typo así "
+                "fusionaría a dos responsables distintos en uno."
+            )
+        vistos[nombre] = slug
     return mapa
 
 
@@ -100,7 +114,9 @@ TIMEOUT_SEGUNDOS = 60
 
 def _extraer_id(url):
     """Saca el id del documento de una URL de Google Sheets."""
-    encontrado = re.search(r"/spreadsheets/d/([A-Za-z0-9_-]+)", url)
+    # Anclado al inicio del path: sin esto, una URL ajena que solo contuviera
+    # la subcadena "/spreadsheets/d/..." se aceptaría igual.
+    encontrado = re.search(r"^https://docs\.google\.com/spreadsheets/d/([A-Za-z0-9_-]+)", url)
     if not encontrado:
         raise BuildError(f"{url} no parece una URL de Google Sheets")
     return encontrado.group(1)
@@ -127,6 +143,19 @@ def _descargar_sheet(id_documento, destino):
             f"Google Sheets respondió {respuesta.status_code} al pedir el "
             f"documento {id_documento}. Comprueba que sigue siendo de lectura "
             "pública."
+        )
+    # Si el documento deja de ser de lectura pública, Google responde 200
+    # igualmente pero con una página HTML de inicio de sesión en vez del
+    # .xlsx: el status check de arriba pasaría y pd.ExcelFile fallaría más
+    # tarde con un BadZipFile críptico. Un .xlsx es un zip y todo zip empieza
+    # con la firma "PK", así que se comprueba aquí y se levanta el error
+    # diseñado para esto.
+    if not respuesta.content.startswith(b"PK"):
+        raise BuildError(
+            f"El documento {id_documento} no devolvió un .xlsx válido. "
+            "Comprueba que sigue siendo de lectura pública: si no lo es, "
+            "Google responde 200 con una página de inicio de sesión en vez "
+            "del archivo."
         )
     destino = Path(destino)
     destino.write_bytes(respuesta.content)
@@ -156,7 +185,7 @@ def load(origen=None):
     Sin argumento usa el documento configurado en ID_DOCUMENTO. Con una URL
     de Sheets usa ese documento. Con una ruta lee ese archivo.
     """
-    if origen is None or str(origen).startswith("http"):
+    if origen is None or str(origen).lower().startswith("http"):
         id_documento = (
             ID_DOCUMENTO if origen is None else _extraer_id(str(origen))
         )
@@ -248,9 +277,15 @@ def validate(registros, formularios, nombres):
     }
     sin_mapear = slugs - set(nombres)
     if sin_mapear:
+        # No se interpolan los slugs completos: se derivan de nombres reales
+        # y los logs de Actions son legibles por cualquiera en un repositorio
+        # público. El enmascarado de secrets de GitHub no cubre un valor que
+        # no está en el secret tal cual.
+        adelantos = sorted(f"{s[:4]}..." for s in sin_mapear)
         raise BuildError(
-            f"Responsables con nombre en formato slug sin mapear: "
-            f"{sorted(sin_mapear)}. Añádelos a nombres.json con su nombre "
+            f"Hay {len(sin_mapear)} responsable(s) con nombre en formato "
+            f"slug sin mapear: {adelantos}. Corre el build en local para ver "
+            "la lista completa y añádelos a nombres.json con su nombre "
             "correcto y acentuado."
         )
 
@@ -290,8 +325,8 @@ def clean(registros, formularios, nombres):
     )
     df["NIVEL_RIESGO"] = df["NIVEL_RIESGO"].fillna(RIESGO_NULO)
 
-    nombres = _nombres_actuales(formularios)
-    df["NOMBRE_FORMULARIO_ACTUAL"] = df["ID_FORMULARIO"].map(nombres)
+    nombres_formulario = _nombres_actuales(formularios)
+    df["NOMBRE_FORMULARIO_ACTUAL"] = df["ID_FORMULARIO"].map(nombres_formulario)
     sin_nombre = df["NOMBRE_FORMULARIO_ACTUAL"].isna()
     if sin_nombre.any():
         ids = sorted(df.loc[sin_nombre, "ID_FORMULARIO"].unique())
@@ -391,7 +426,10 @@ def encode(df, formularios):
             "conclusiones": conclusiones,
         },
         "meta": {
-            "generado": pd.Timestamp.now().strftime("%Y-%m-%d %H:%M"),
+            # UTC explícito: el runner de CI y quien lee el dashboard suelen
+            # estar en zonas horarias distintas, y una hora sin calificar es
+            # simplemente incorrecta para el lector.
+            "generado": pd.Timestamp.now(tz="UTC").strftime("%Y-%m-%d %H:%M UTC"),
             "filas": len(df),
             "dia_min": int(df["DIA"].min()),
             "dia_max": int(df["DIA"].max()),
@@ -436,6 +474,10 @@ def main(argv=None):
     origen = argv[0] if argv else None
     salida = raiz / "dashboard.html"
 
+    # Se carga antes de descargar el libro: si falta el mapa de nombres, el
+    # build aborta sin gastar una descarga completa del Sheet primero.
+    nombres = cargar_nombres()
+
     if origen is None:
         print(f"Leyendo el documento en vivo {ID_DOCUMENTO}")
     else:
@@ -443,13 +485,13 @@ def main(argv=None):
     registros, formularios = load(origen)
     print(f"Leídas {len(registros)} filas de REGISTROS")
 
-    nombres = cargar_nombres()
     validate(registros, formularios, nombres)
     limpio = clean(registros, formularios, nombres)
     normalizados = int(registros["RESPONSABLE"].isin(nombres).sum())
     areas = int(registros["AREA_ESPECIFICA_APLICACION"].isna().sum())
     print(f"Nombres normalizados: {normalizados}")
     print(f"Áreas nulas rellenadas como «{AREA_NULA}»: {areas}")
+    print(f"Responsables distintos: {limpio['RESPONSABLE'].nunique()}")
 
     data = encode(limpio, formularios)
     escritos = render_html(

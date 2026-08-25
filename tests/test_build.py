@@ -25,6 +25,7 @@ TEMPLATE = Path(__file__).resolve().parent.parent / "template.html"
 VENDOR = Path(__file__).resolve().parent.parent / "vendor" / "chart.umd.min.js"
 
 
+@pytest.mark.skipif(not XLSX.exists(), reason="requiere el export local SupPCI.xlsx")
 def test_load_devuelve_registros_y_formularios():
     registros, formularios = load(XLSX)
     assert len(registros) == 2806
@@ -97,10 +98,14 @@ def test_validate_rechaza_porcentaje_no_entero(registros_ok, formularios_ok, nom
 
 def test_validate_rechaza_slug_desconocido(registros_ok, formularios_ok, nombres_ok):
     registros_ok.loc[0, "RESPONSABLE"] = "pedro_nuevo_sin_mapear"
-    with pytest.raises(BuildError, match="pedro_nuevo_sin_mapear"):
+    # No se matchea el slug completo: el mensaje solo imprime un adelanto de
+    # 4 caracteres a propósito (ver FIX 3), así que la prueba confirma que la
+    # validación se disparó con la cuenta y una frase estable, no con el slug.
+    with pytest.raises(BuildError, match=r"Hay 1 responsable\(s\)"):
         validate(registros_ok, formularios_ok, nombres_ok)
 
 
+@pytest.mark.skipif(not XLSX.exists(), reason="requiere el export local SupPCI.xlsx")
 def test_validate_pasa_sobre_el_excel_real():
     registros, formularios = load(XLSX)
     validate(registros, formularios, cargar_nombres())  # no levanta
@@ -143,6 +148,7 @@ def test_clean_deriva_mes_semana_y_dia(registros_ok, formularios_ok, nombres_ok)
     )
 
 
+@pytest.mark.skipif(not XLSX.exists(), reason="requiere el export local SupPCI.xlsx")
 def test_clean_sobre_el_excel_real_conserva_todas_las_filas():
     registros, formularios = load(XLSX)
     limpio = clean(registros, formularios, cargar_nombres())
@@ -201,8 +207,8 @@ def test_encode_deja_evaluado_como_texto_plano(registros_ok, formularios_ok, nom
     assert "evaluado" not in data["dims"]
 
 
-def test_cifra_de_control_tasa_global():
-    registros, formularios = load(XLSX)
+def test_cifra_de_control_tasa_global(libro_real):
+    registros, formularios = load(libro_real)
     data = encode(clean(registros, formularios, cargar_nombres()), formularios)
     cumple = data["rows"]["cumple"]
     con_dictamen = [c for c in cumple if c >= 0]
@@ -211,8 +217,8 @@ def test_cifra_de_control_tasa_global():
     assert del_pipeline == pytest.approx(de_pandas)
 
 
-def test_cifra_de_control_tasa_por_responsable():
-    registros, formularios = load(XLSX)
+def test_cifra_de_control_tasa_por_responsable(libro_real):
+    registros, formularios = load(libro_real)
     limpio = clean(registros, formularios, cargar_nombres())
     data = encode(limpio, formularios)
     dims = data["dims"]["responsable"]
@@ -229,8 +235,8 @@ def test_cifra_de_control_tasa_por_responsable():
         assert sum(cumple) / len(cumple) == pytest.approx(esperado), nombre
 
 
-def test_cifra_de_control_tasa_por_mes():
-    registros, formularios = load(XLSX)
+def test_cifra_de_control_tasa_por_mes(libro_real):
+    registros, formularios = load(libro_real)
     limpio = clean(registros, formularios, cargar_nombres())
     data = encode(limpio, formularios)
     dims = data["dims"]["mes"]
@@ -245,8 +251,8 @@ def test_cifra_de_control_tasa_por_mes():
         assert sum(cumple) / len(cumple) == pytest.approx(esperado), mes
 
 
-def test_render_html_produce_un_archivo_sin_urls_externas(tmp_path):
-    registros, formularios = load(XLSX)
+def test_render_html_produce_un_archivo_sin_urls_externas(tmp_path, libro_real):
+    registros, formularios = load(libro_real)
     data = encode(clean(registros, formularios, cargar_nombres()), formularios)
     salida = tmp_path / "dashboard.html"
     escritos = render_html(data, TEMPLATE, VENDOR, salida)
@@ -268,11 +274,11 @@ def test_render_html_produce_un_archivo_sin_urls_externas(tmp_path):
     assert "@import" not in html
 
 
-def test_render_html_embebe_los_datos_reales(tmp_path):
+def test_render_html_embebe_los_datos_reales(tmp_path, libro_real):
     # No se usa un nombre literal: este mapa es el real (nombres.json, fuera
     # del repo), así que la aserción se deriva de él en vez de citarlo, para
     # que ningún nombre real quede escrito en un archivo versionado.
-    registros, formularios = load(XLSX)
+    registros, formularios = load(libro_real)
     nombres = cargar_nombres()
     data = encode(clean(registros, formularios, nombres), formularios)
     salida = tmp_path / "dashboard.html"
@@ -283,8 +289,8 @@ def test_render_html_embebe_los_datos_reales(tmp_path):
     assert slug not in html
 
 
-def test_render_html_vendor_ausente_levanta_builderror_con_instrucciones(tmp_path):
-    registros, formularios = load(XLSX)
+def test_render_html_vendor_ausente_levanta_builderror_con_instrucciones(tmp_path, libro_real):
+    registros, formularios = load(libro_real)
     data = encode(clean(registros, formularios, cargar_nombres()), formularios)
     salida = tmp_path / "dashboard.html"
     vendor_inexistente = tmp_path / "no_esta" / "chart.umd.min.js"
@@ -336,6 +342,15 @@ def test_cargar_nombres_rechaza_valores_no_texto(tmp_path):
         cargar_nombres(ruta)
 
 
+def test_cargar_nombres_rechaza_valores_repetidos(tmp_path):
+    ruta = tmp_path / "nombres.json"
+    ruta.write_text(
+        '{"ana_p_rez": "Ana Pérez", "ana_p_rez_2": "Ana Pérez"}', encoding="utf-8"
+    )
+    with pytest.raises(BuildError, match="Ana Pérez"):
+        cargar_nombres(ruta)
+
+
 def test_el_ejemplo_versionado_es_cargable():
     ejemplo = Path(__file__).resolve().parent.parent / "nombres.json.ejemplo"
     mapa = cargar_nombres(ejemplo)
@@ -362,11 +377,24 @@ def test_extraer_id_rechaza_una_url_ajena():
 
 def test_descargar_sheet_escribe_el_contenido(tmp_path):
     destino = tmp_path / "sheet.xlsx"
-    respuesta = Mock(status_code=200, content=b"contenido-binario")
+    respuesta = Mock(status_code=200, content=b"PK-contenido-binario")
     with patch("build_dashboard.requests.get", return_value=respuesta) as get:
         _descargar_sheet("ABC123", destino)
-    assert destino.read_bytes() == b"contenido-binario"
+    assert destino.read_bytes() == b"PK-contenido-binario"
     assert "ABC123" in get.call_args.args[0]
+
+
+def test_descargar_sheet_con_html_de_login_levanta_builderror(tmp_path):
+    # Si el Sheet deja de ser público, Google responde 200 con una página de
+    # inicio de sesión en vez del .xlsx. El status check por sí solo no lo
+    # detecta; hace falta comprobar la firma ZIP del contenido.
+    respuesta = Mock(
+        status_code=200,
+        content=b"<!doctype html><html><body>Inicia sesion</body></html>",
+    )
+    with patch("build_dashboard.requests.get", return_value=respuesta):
+        with pytest.raises(BuildError, match="lectura pública"):
+            _descargar_sheet("ABC123", tmp_path / "sheet.xlsx")
 
 
 def test_descargar_sheet_con_http_no_exitoso_levanta_builderror(tmp_path):
@@ -385,6 +413,7 @@ def test_descargar_sheet_sin_red_levanta_builderror(tmp_path):
             _descargar_sheet("ABC123", tmp_path / "sheet.xlsx")
 
 
+@pytest.mark.skipif(not XLSX.exists(), reason="requiere el export local SupPCI.xlsx")
 def test_load_sin_argumento_usa_el_documento_configurado():
     contenido = XLSX.read_bytes()
     respuesta = Mock(status_code=200, content=contenido)
@@ -395,6 +424,7 @@ def test_load_sin_argumento_usa_el_documento_configurado():
     assert len(formularios) == 76
 
 
+@pytest.mark.skipif(not XLSX.exists(), reason="requiere el export local SupPCI.xlsx")
 def test_load_con_url_descarga_ese_documento():
     contenido = XLSX.read_bytes()
     respuesta = Mock(status_code=200, content=contenido)
@@ -404,6 +434,7 @@ def test_load_con_url_descarga_ese_documento():
     assert len(registros) == 2806
 
 
+@pytest.mark.skipif(not XLSX.exists(), reason="requiere el export local SupPCI.xlsx")
 def test_load_con_ruta_sigue_leyendo_el_archivo():
     with patch("build_dashboard.requests.get") as get:
         registros, formularios = load(XLSX)
