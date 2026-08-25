@@ -1,3 +1,4 @@
+import re
 from unittest.mock import patch
 
 import pytest
@@ -98,3 +99,105 @@ def test_descargar_convierte_el_fallo_de_red_en_koboerror():
                side_effect=requests.RequestException("sin ruta al host")):
         with pytest.raises(kobo.KoboError, match="sin ruta al host"):
             kobo.descargar("t0ken")
+
+
+def esquema_completo():
+    """Esquema sintético con todas las etiquetas que el manifiesto exige."""
+    survey = [
+        {"type": "date", "name": "fecha", "label": [kobo.CAMPOS["fecha"]]},
+        {"type": "select_one", "name": "resp",
+         "label": [kobo.CAMPOS["responsable"]]},
+        {"type": "select_one", "name": "serv",
+         "label": [kobo.CAMPOS["servicio"]]},
+        {"type": "select_multiple", "name": "prod",
+         "label": [kobo.CAMPOS["actividades"]]},
+        {"type": "text", "name": "paciente", "label": ["Nombre del paciente"]},
+        {"type": "text", "name": "expediente", "label": ["Expediente"]},
+        {"type": "text", "name": "conclusiones", "label": ["CONCLUSIONES"]},
+    ]
+    for i, (_, etiqueta) in enumerate(kobo.ITEMS):
+        survey.append({"type": "select_one", "name": f"i{i}", "label": [etiqueta]})
+    choices = [
+        {"list_name": "prod", "name": f"a{i}", "label": [a]}
+        for i, a in enumerate(kobo.ACTIVIDADES)
+    ]
+    return {"content": {"survey": survey, "choices": choices}}
+
+
+def envio(**extra):
+    base = {
+        "fecha": "2026-07-21",
+        "resp": "Ana Investigadora",
+        "serv": "Nefrología",
+        "prod": "a0",
+        "i0": "SI",
+        "i1": "NO",
+        "paciente": "PACIENTE_SINTETICO_XYZ",
+        "expediente": "EXP-999999",
+        "conclusiones": "CONCLUSION_SINTETICA_XYZ",
+        "_id": 1,
+        "_uuid": "uuid-1",
+    }
+    base.update(extra)
+    return base
+
+
+def limpiar_con(esquema, envios):
+    """limpiar() con el mapa y las opciones del mismo esquema."""
+    mapa = kobo.validar(esquema)
+    return kobo.limpiar(envios, mapa, choices=kobo._choices_de_actividad(esquema))
+
+
+def test_validar_devuelve_el_mapa_cuando_estan_todas_las_etiquetas():
+    mapa = kobo.validar(esquema_completo())
+    assert mapa[kobo.normalizar(kobo.CAMPOS["fecha"])] == "fecha"
+
+
+def test_validar_nombra_la_etiqueta_que_falta():
+    esquema = esquema_completo()
+    esquema["content"]["survey"] = [
+        c for c in esquema["content"]["survey"]
+        if c["label"][0] != kobo.ITEMS[3][1]
+    ]
+    with pytest.raises(kobo.KoboError, match=re.escape(kobo.ITEMS[3][1][:25])):
+        kobo.validar(esquema)
+
+
+def test_limpiar_no_conserva_ningun_campo_prohibido():
+    filas, _ = limpiar_con(esquema_completo(), [envio()])
+    texto = repr(filas)
+    assert "PACIENTE_SINTETICO_XYZ" not in texto
+    assert "EXP-999999" not in texto
+    assert "CONCLUSION_SINTETICA_XYZ" not in texto
+    assert "uuid-1" not in texto
+    assert set(filas[0]) == {"fecha", "responsable", "servicio",
+                             "actividades", "items"}
+
+
+def test_limpiar_marca_solo_las_actividades_declaradas():
+    filas, _ = limpiar_con(esquema_completo(), [envio(prod="a0 a2")])
+    assert filas[0]["actividades"] == [1, 0, 1, 0, 0, 0]
+
+
+def test_limpiar_deja_en_none_los_items_sin_responder():
+    filas, _ = limpiar_con(esquema_completo(), [envio()])
+    assert filas[0]["items"][0] == 1
+    assert filas[0]["items"][1] == 0
+    assert filas[0]["items"][2] is None
+
+
+def test_limpiar_cuenta_pacientes_distintos_sin_publicarlos():
+    envios = [envio(expediente="A"), envio(expediente="A"), envio(expediente="B")]
+    filas, pacientes = limpiar_con(esquema_completo(), envios)
+    assert pacientes == 2
+    assert "'A'" not in repr(filas)
+
+
+def test_limpiar_rechaza_un_valor_desconocido_en_un_item():
+    with pytest.raises(kobo.KoboError, match="QUIZÁS"):
+        limpiar_con(esquema_completo(), [envio(i0="QUIZÁS")])
+
+
+def test_limpiar_rechaza_una_fecha_ilegible():
+    with pytest.raises(kobo.KoboError, match="ayer"):
+        limpiar_con(esquema_completo(), [envio(fecha="ayer")])

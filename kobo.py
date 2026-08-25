@@ -165,3 +165,94 @@ def descargar(token, servidor=KOBO_SERVIDOR, uid=KOBO_ASSET_UID):
         envios.extend(pagina.get("results", []))
         url = pagina.get("next")
     return esquema, envios
+
+
+VALORES_ITEM = {"SI": 1, "SÍ": 1, "NO": 0}
+
+
+def _choices_de_actividad(esquema):
+    """Etiqueta normalizada → nombre de opción, para «Producción Reportada»."""
+    salida = {}
+    for opcion in esquema.get("content", {}).get("choices", []):
+        etiquetas = opcion.get("label") or []
+        if etiquetas and opcion.get("name"):
+            salida[normalizar(etiquetas[0])] = opcion["name"]
+    return salida
+
+
+def validar(esquema):
+    """Comprueba que el formulario tiene la forma del manifiesto.
+
+    Devuelve el mapa etiqueta→nombre para que quien valida y quien limpia no
+    puedan acabar usando mapas distintos.
+    """
+    mapa = mapa_de_campos(esquema)
+    esperadas = [*CAMPOS.values(), *(etiqueta for _, etiqueta in ITEMS)]
+    faltan = [e for e in esperadas if normalizar(e) not in mapa]
+    if faltan:
+        raise KoboError(
+            "El formulario de Kobo ya no tiene la forma esperada. No se "
+            f"encontraron estas preguntas: {faltan}. Si las renombraste en "
+            "Kobo, actualiza el manifiesto de kobo.py."
+        )
+    choices = _choices_de_actividad(esquema)
+    faltan_actividades = [a for a in ACTIVIDADES if normalizar(a) not in choices]
+    if faltan_actividades:
+        raise KoboError(
+            "Faltan opciones de «Producción Reportada» en el formulario: "
+            f"{faltan_actividades}."
+        )
+    return mapa
+
+
+def limpiar(envios, mapa, choices=None):
+    """Aplica la lista blanca. Devuelve (filas, pacientes distintos).
+
+    Lo que no está en la lista blanca no se copia: un campo nuevo en Kobo no
+    se publica por descuido, que es el comportamiento que hace falta por
+    defecto en una página pública.
+    """
+    choices = choices or {}
+    nombre_actividad = [choices.get(normalizar(a), a) for a in ACTIVIDADES]
+    campo = {clave: mapa[normalizar(etiqueta)] for clave, etiqueta in CAMPOS.items()}
+    campos_item = [mapa[normalizar(etiqueta)] for _, etiqueta in ITEMS]
+    # El expediente se lee para contar personas distintas y se descarta con el
+    # envío: no entra en `filas` ni, por tanto, en el HTML. El nombre del
+    # campo sale del mapa, no de una cadena adivinada.
+    campo_expediente = mapa.get(normalizar("Expediente"))
+
+    filas = []
+    expedientes = set()
+    for envio in envios:
+        crudo = str(envio.get(campo["fecha"], "")).strip()
+        fecha = crudo[:10]
+        if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", fecha):
+            raise KoboError(
+                f"Un envío trae una fecha de registro ilegible: {crudo!r}."
+            )
+        declaradas = str(envio.get(campo["actividades"], "")).split()
+        items = []
+        for nombre in campos_item:
+            valor = envio.get(nombre)
+            if valor in (None, ""):
+                items.append(None)
+                continue
+            texto = str(valor).strip().upper()
+            if texto not in VALORES_ITEM:
+                raise KoboError(
+                    f"Un ítem trae un valor no soportado: {texto!r}. Solo se "
+                    "interpretan SI y NO."
+                )
+            items.append(VALORES_ITEM[texto])
+        filas.append({
+            "fecha": fecha,
+            "responsable": str(envio.get(campo["responsable"], "")).strip(),
+            "servicio": str(envio.get(campo["servicio"], "")).strip(),
+            "actividades": [1 if n in declaradas else 0 for n in nombre_actividad],
+            "items": items,
+        })
+        if campo_expediente:
+            expediente = str(envio.get(campo_expediente, "")).strip()
+            if expediente:
+                expedientes.add(expediente)
+    return filas, len(expedientes)
