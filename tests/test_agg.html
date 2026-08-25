@@ -121,8 +121,15 @@ const store = (() => {
 })();
 </script>
 <script id="mod-agg">
-const agg = (() => {
-  const r = DATA.rows;
+/** Fábrica de agregación sobre un dataset con `rows` y `dims`.
+ *
+ * Es fábrica y no módulo suelto porque el dashboard tiene dos datasets —las
+ * supervisiones y los envíos de IAAS— y duplicar la agregación para el
+ * segundo dejaría dos copias que divergen.
+ */
+function crearAgg(dataset) {
+  const r = dataset.rows;
+  const DIMS = dataset.dims;
 
   /** Tasa sobre los registros con dictamen. null si no hay ninguno. */
   function tasaDe(si, no) {
@@ -133,7 +140,7 @@ const agg = (() => {
   function kpis(rows) {
     let si = 0, no = 0, sin = 0, aprobados = 0;
     const resp = new Set(), form = new Set();
-    const idxAprobado = DATA.dims.estado.indexOf('Aprobado');
+    const idxAprobado = DIMS.estado.indexOf('Aprobado');
     for (const i of rows) {
       if (r.cumple[i] === 1) si++;
       else if (r.cumple[i] === 0) no++;
@@ -168,7 +175,7 @@ const agg = (() => {
   }
 
   function rateBy(rows, dimKey) {
-    const etiquetas = DATA.dims[dimKey];
+    const etiquetas = DIMS[dimKey];
     const acc = new Map();
     for (const i of rows) {
       const idx = r[dimKey][i];
@@ -195,7 +202,7 @@ const agg = (() => {
   }
 
   function series(rows, periodo) {
-    const etiquetas = DATA.dims[periodo];
+    const etiquetas = DIMS[periodo];
     const presentes = new Set();
     const si = new Map(), no = new Map(), vol = new Map();
     for (const i of rows) {
@@ -240,8 +247,8 @@ const agg = (() => {
     const fs = [...filasPresentes].sort((a, b) => a - b);
     const cs = [...colsPresentes].sort((a, b) => a - b);
     return {
-      rowLabels: fs.map(f => DATA.dims[dimKey][f]),
-      colLabels: cs.map(c => DATA.dims[periodo][c]),
+      rowLabels: fs.map(f => DIMS[dimKey][f]),
+      colLabels: cs.map(c => DIMS[periodo][c]),
       cells: fs.map(f => cs.map(c => {
         const k = clave(f, c);
         return {
@@ -253,7 +260,8 @@ const agg = (() => {
   }
 
   return {kpis, rateBy, series, heatmap, tasaDe, totalDe};
-})();
+}
+const agg = crearAgg(DATA);
 </script>
 
 <script>
@@ -304,6 +312,13 @@ check('totalDe sin ningun dictamen da null, no 0',
       agg.totalDe([{total: 2, si: 0, no: 0}]).tasa, null);
 check('totalDe de una lista vacia',
       agg.totalDe([]), {n: 0, total: 0, tasa: null});
+
+const aggAlterno = crearAgg({dims: DATA.dims, rows: DATA.rows});
+check('crearAgg devuelve un agregador equivalente',
+      aggAlterno.kpis(todas).tasa, agg.kpis(todas).tasa);
+check('crearAgg no comparte estado entre instancias',
+      aggAlterno.rateBy(todas, 'responsable').length,
+      agg.rateBy(todas, 'responsable').length);
 
 const mes = agg.series(todas, 'mes');
 check('series etiquetas de mes', mes.labels, ['2026-07', '2026-08']);
