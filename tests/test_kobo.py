@@ -264,3 +264,65 @@ def test_construir_falla_si_ningun_envio_declara_actividades():
                return_value=(esquema_completo(), [envio(prod=""), envio(prod="")])):
         with pytest.raises(kobo.KoboError, match="actividad"):
             kobo.construir("t0ken")
+
+
+# Forma real que devuelve la API de Kobo, comprobada contra el formulario en
+# producción: las preguntas no traen `name` sino `$autoname`, los ítems son
+# `score__row` dentro de `begin_score`, y `$xpath` ya da la ruta del envío.
+ESQUEMA_KOBO = {
+    "content": {
+        "survey": [
+            {"type": "date", "$autoname": "Fecha_de_registro",
+             "$xpath": "Fecha_de_registro", "label": ["Fecha de registro"]},
+            {"type": "begin_score", "$autoname": "CASOS_NUEVOS_INVESTIGADOS",
+             "label": ["CASOS NUEVOS INVESTIGADOS"]},
+            {"type": "score__row", "$autoname": "Se_realizo_investiga_i_n",
+             "$xpath": "CASOS_NUEVOS_INVESTIGADOS/Se_realizo_investiga_i_n",
+             "label": ["Se realizo investigación de un nuevo caso"]},
+            {"type": "end_score"},
+            {"type": "select_one", "$autoname": "Sin_xpath",
+             "label": ["Pregunta sin xpath"]},
+        ],
+        "choices": [],
+    }
+}
+
+
+def test_mapa_de_campos_usa_autoname_cuando_no_hay_name():
+    mapa = kobo.mapa_de_campos(ESQUEMA_KOBO)
+    assert mapa["fecha de registro"] == "Fecha_de_registro"
+
+
+def test_mapa_de_campos_prefiere_el_xpath_de_la_propia_api():
+    mapa = kobo.mapa_de_campos(ESQUEMA_KOBO)
+    assert (mapa["se realizo investigación de un nuevo caso"]
+            == "CASOS_NUEVOS_INVESTIGADOS/Se_realizo_investiga_i_n")
+
+
+def test_mapa_de_campos_sin_xpath_cae_al_autoname():
+    mapa = kobo.mapa_de_campos(ESQUEMA_KOBO)
+    assert mapa["pregunta sin xpath"] == "Sin_xpath"
+
+
+def test_mapa_de_campos_no_confunde_el_grupo_de_puntuacion_con_una_pregunta():
+    """`begin_score` es el contenedor de una actividad, no un ítem."""
+    mapa = kobo.mapa_de_campos(ESQUEMA_KOBO)
+    assert "casos nuevos investigados" not in mapa
+
+
+def test_limpiar_trata_n_a_como_no_aplica_y_no_como_incumplimiento():
+    """El formulario ofrece SI, NO y N/A; el export solo tenía SI y NO.
+
+    N/A es «no aplica»: queda fuera del denominador, igual que un ítem sin
+    responder. Contarlo como NO castigaría a quien declara honestamente que
+    algo no aplicaba.
+    """
+    filas, _ = limpiar_con(esquema_completo(), [envio(i0="n_a")])
+    assert filas[0]["items"][0] is None
+
+
+def test_limpiar_acepta_los_nombres_de_opcion_en_minuscula():
+    """La API devuelve el nombre de la opción («si»), no su etiqueta («SI»)."""
+    filas, _ = limpiar_con(esquema_completo(), [envio(i0="si", i1="no")])
+    assert filas[0]["items"][0] == 1
+    assert filas[0]["items"][1] == 0

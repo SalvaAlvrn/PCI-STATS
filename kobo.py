@@ -108,18 +108,28 @@ def mapa_de_campos(esquema):
     grupos = []
     for campo in survey:
         tipo = campo.get("type")
-        if tipo == "begin_group":
-            grupos.append(campo.get("name", ""))
+        # Las actividades del formulario son grupos de puntuación
+        # (`begin_score`), no `begin_group`: sus ítems son `score__row`. El
+        # contenedor no es una pregunta y no entra en el mapa.
+        if tipo in ("begin_group", "begin_score", "begin_repeat"):
+            grupos.append(campo.get("name") or campo.get("$autoname", ""))
             continue
-        if tipo == "end_group":
+        if tipo in ("end_group", "end_score", "end_repeat"):
             if grupos:
                 grupos.pop()
             continue
         etiquetas = campo.get("label") or []
-        nombre = campo.get("name")
+        # Kobo solo escribe `name` cuando quien diseñó el formulario lo puso a
+        # mano; el resto de preguntas viajan con `$autoname`, que es el nombre
+        # que acaba en los envíos.
+        nombre = campo.get("name") or campo.get("$autoname")
         if not etiquetas or not nombre:
             continue
-        mapa[normalizar(etiquetas[0])] = "/".join([*grupos, nombre])
+        # `$xpath` ya trae la ruta completa tal como aparece en el envío.
+        # Cuando está, se usa: es la respuesta de la propia API en lugar de
+        # una ruta reconstruida por nosotros.
+        ruta = campo.get("$xpath") or "/".join([*grupos, nombre])
+        mapa[normalizar(etiquetas[0])] = ruta
     return mapa
 
 
@@ -168,7 +178,11 @@ def descargar(token, servidor=KOBO_SERVIDOR, uid=KOBO_ASSET_UID):
     return esquema, envios
 
 
+# Los envíos traen el nombre de la opción («si»), no su etiqueta («SI»).
 VALORES_ITEM = {"SI": 1, "SÍ": 1, "NO": 0}
+# N/A es «no aplica»: fuera del denominador, igual que un ítem sin responder.
+# Contarlo como incumplimiento castigaría a quien declara que algo no aplicaba.
+VALORES_NO_APLICA = {"N_A", "N/A", "NA"}
 
 
 def _choices_de_actividad(esquema):
@@ -239,10 +253,13 @@ def limpiar(envios, mapa, choices=None):
                 items.append(None)
                 continue
             texto = str(valor).strip().upper()
+            if texto in VALORES_NO_APLICA:
+                items.append(None)
+                continue
             if texto not in VALORES_ITEM:
                 raise KoboError(
                     f"Un ítem trae un valor no soportado: {texto!r}. Solo se "
-                    "interpretan SI y NO."
+                    "interpretan SI, NO y N/A."
                 )
             items.append(VALORES_ITEM[texto])
         filas.append({
