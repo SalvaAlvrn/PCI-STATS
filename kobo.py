@@ -9,6 +9,7 @@ falle o cambie de forma.
 import re
 import unicodedata
 
+import pandas as pd
 import requests
 
 
@@ -256,3 +257,60 @@ def limpiar(envios, mapa, choices=None):
             if expediente:
                 expedientes.add(expediente)
     return filas, len(expedientes)
+
+
+def construir(token, servidor=KOBO_SERVIDOR, uid=KOBO_ASSET_UID):
+    """Descarga, valida, limpia y codifica. Devuelve el bloque DATA.iaas."""
+    esquema, envios = descargar(token, servidor, uid)
+    mapa = validar(esquema)
+    filas, pacientes = limpiar(envios, mapa, choices=_choices_de_actividad(esquema))
+
+    fechas = (pd.to_datetime([f["fecha"] for f in filas])
+              if filas else pd.DatetimeIndex([]))
+    meses = [f"{d:%Y-%m}" for d in fechas]
+    semanas = [f"{c.year}-W{c.week:02d}" for c in (d.isocalendar() for d in fechas)]
+    # Días desde epoch, igual que DIA en build_dashboard.py: el cast a
+    # datetime64[D] no depende de la unidad de la columna.
+    dias = [int(d.to_datetime64().astype("datetime64[D]").astype("int64"))
+            for d in fechas]
+
+    dims = {}
+    rows = {}
+    for clave, valores in (
+        ("responsable", [f["responsable"] for f in filas]),
+        ("servicio", [f["servicio"] for f in filas]),
+        ("mes", meses),
+        ("semana", semanas),
+    ):
+        # Orden alfabético para que el archivo sea determinista entre builds,
+        # igual que en encode() de build_dashboard.py.
+        categorias = sorted(set(valores))
+        indice = {v: i for i, v in enumerate(categorias)}
+        dims[clave] = categorias
+        rows[clave] = [indice[v] for v in valores]
+
+    rows["dia"] = dias
+    rows["actividades"] = [
+        [f["actividades"][a] for f in filas] for a in range(len(ACTIVIDADES))
+    ]
+    rows["items"] = [[f["items"][j] for f in filas] for j in range(len(ITEMS))]
+    rows["si"] = [sum(1 for v in f["items"] if v == 1) for f in filas]
+    rows["no"] = [sum(1 for v in f["items"] if v == 0) for f in filas]
+
+    return {
+        "ok": True,
+        "dims": dims,
+        "actividades": list(ACTIVIDADES),
+        "items": [
+            {"titulo": etiqueta, "actividad": ACTIVIDADES.index(actividad)}
+            for actividad, etiqueta in ITEMS
+        ],
+        "rows": rows,
+        "meta": {
+            "generado": pd.Timestamp.now(tz="UTC").strftime("%Y-%m-%d %H:%M UTC"),
+            "filas": len(filas),
+            "pacientes": pacientes,
+            "dia_min": min(dias) if dias else 0,
+            "dia_max": max(dias) if dias else 0,
+        },
+    }

@@ -201,3 +201,52 @@ def test_limpiar_rechaza_un_valor_desconocido_en_un_item():
 def test_limpiar_rechaza_una_fecha_ilegible():
     with pytest.raises(kobo.KoboError, match="ayer"):
         limpiar_con(esquema_completo(), [envio(fecha="ayer")])
+
+
+def test_construir_devuelve_columnas_paralelas_por_item():
+    with patch("kobo.descargar",
+               return_value=(esquema_completo(), [envio(), envio(i0="NO")])):
+        data = kobo.construir("t0ken")
+    assert data["ok"] is True
+    assert len(data["rows"]["items"]) == 24
+    assert data["rows"]["items"][0] == [1, 0]
+
+
+def test_construir_cuenta_si_y_no_por_envio():
+    with patch("kobo.descargar", return_value=(esquema_completo(), [envio()])):
+        data = kobo.construir("t0ken")
+    # El envío sintético responde i0=SI e i1=NO; el resto queda sin responder.
+    assert data["rows"]["si"] == [1]
+    assert data["rows"]["no"] == [1]
+
+
+def test_construir_ordena_las_dimensiones_alfabeticamente():
+    envios = [envio(resp="Zulema"), envio(resp="Ana")]
+    with patch("kobo.descargar", return_value=(esquema_completo(), envios)):
+        data = kobo.construir("t0ken")
+    assert data["dims"]["responsable"] == ["Ana", "Zulema"]
+    assert data["rows"]["responsable"] == [1, 0]
+
+
+def test_construir_deriva_mes_semana_y_dia():
+    with patch("kobo.descargar",
+               return_value=(esquema_completo(), [envio(fecha="2026-07-21")])):
+        data = kobo.construir("t0ken")
+    assert data["dims"]["mes"] == ["2026-07"]
+    assert data["dims"]["semana"] == ["2026-W30"]
+    assert data["rows"]["dia"] == [20655]
+
+
+def test_construir_publica_el_recuento_de_pacientes_pero_no_los_expedientes():
+    envios = [envio(expediente="EXP-1"), envio(expediente="EXP-2")]
+    with patch("kobo.descargar", return_value=(esquema_completo(), envios)):
+        data = kobo.construir("t0ken")
+    assert data["meta"]["pacientes"] == 2
+    assert "EXP-1" not in repr(data)
+
+
+def test_construir_sin_envios_no_revienta():
+    with patch("kobo.descargar", return_value=(esquema_completo(), [])):
+        data = kobo.construir("t0ken")
+    assert data["meta"]["filas"] == 0
+    assert data["rows"]["items"] == [[] for _ in range(24)]
