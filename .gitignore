@@ -5,3 +5,4 @@ __pycache__/
 .pytest_cache/
 vendor/*.js
 .idea/
+.claude/worktrees/
