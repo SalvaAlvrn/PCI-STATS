@@ -78,6 +78,7 @@ table { border-collapse: collapse; width: 100%; font-size: 13px; }
 th, td { text-align: left; padding: 7px 10px; border-bottom: 1px solid var(--grid); }
 th { color: var(--text-secondary); font-weight: 600; cursor: pointer; }
 td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+tfoot td { font-weight: 600; border-top: 2px solid var(--border); border-bottom: none; }
 .scroll-x { overflow-x: auto; }
 
 .tabs { display: flex; gap: 4px; margin-bottom: 16px; }
@@ -217,6 +218,19 @@ const agg = (() => {
     };
   }
 
+  /** Fila de total para una tabla construida con `rateBy`.
+   *
+   * La tasa se pondera por volumen —se recalcula sobre la suma de dictámenes—
+   * en vez de promediar las tasas por fila. Promediarlas daría a un formulario
+   * de dos registros el mismo peso que a uno de doscientos, y el número no
+   * cuadraría con el KPI de cumplimiento de la misma vista.
+   */
+  function totalDe(entradas) {
+    let si = 0, no = 0, total = 0;
+    for (const e of entradas) { si += e.si; no += e.no; total += e.total; }
+    return {n: entradas.length, total, tasa: tasaDe(si, no)};
+  }
+
   function rateBy(rows, dimKey) {
     const etiquetas = DATA.dims[dimKey];
     const acc = new Map();
@@ -302,7 +316,7 @@ const agg = (() => {
     };
   }
 
-  return {kpis, rateBy, series, heatmap, tasaDe};
+  return {kpis, rateBy, series, heatmap, tasaDe, totalDe};
 })();
 </script>
 <script id="mod-charts">
@@ -585,6 +599,9 @@ const charts = (() => {
     opciones = opciones || {};
     const orden = opciones.orden || {col: null, asc: true};
     const onFila = opciones.onFila || null;
+    // Array de celdas, una por columna. Vive en el <tfoot>: no se ordena con
+    // el resto ni responde a onFila, porque no es un registro más.
+    const total = opciones.total || null;
     contenedor.replaceChildren();
 
     // Se ordena una copia: `filas` pertenece a quien llama, que puede estar
@@ -616,7 +633,7 @@ const charts = (() => {
       th.addEventListener('click', () => {
         tabla(contenedor, columnas, filas, {
           orden: {col: i, asc: orden.col === i ? !orden.asc : true},
-          onFila
+          onFila, total
         });
       });
       trh.appendChild(th);
@@ -641,6 +658,20 @@ const charts = (() => {
       tbody.appendChild(tr);
     }
     t.appendChild(tbody);
+    if (total) {
+      const tfoot = document.createElement('tfoot');
+      const tr = document.createElement('tr');
+      columnas.forEach((col, i) => {
+        const td = document.createElement('td');
+        if (col.num) td.className = 'num';
+        const bruto = total[i];
+        td.textContent = bruto === undefined ? ''
+          : (col.formato ? col.formato(bruto) : bruto);
+        tr.appendChild(td);
+      });
+      tfoot.appendChild(tr);
+      t.appendChild(tfoot);
+    }
     envoltura.appendChild(t);
     contenedor.appendChild(envoltura);
   }
@@ -682,6 +713,14 @@ const views = (() => {
     return zona;
   }
 
+  /** Añade a `tarjeta` un gráfico y un botón que lo alterna con su tabla.
+   *
+   * `columnas` y `filas` aceptan tanto un valor como una función sin
+   * argumentos, que se evalúa en cada repintado. Las tarjetas con estado
+   * propio —el conmutador mes/semana, el botón "Ver todas"— pasan funciones y
+   * llaman al `pintar` devuelto en vez de repintar por su cuenta: así el modo
+   * tabla sobrevive a esos cambios en lugar de volver al gráfico.
+   */
   function conTabla(tarjeta, columnas, filas, dibujarGrafico) {
     const zona = zonaDe(tarjeta);
     const boton = document.createElement('button');
@@ -689,18 +728,20 @@ const views = (() => {
     boton.type = 'button';
     boton.style.marginTop = '10px';
     let mostrandoTabla = false;
+    const valor = x => typeof x === 'function' ? x() : x;
     const pintar = () => {
       // Este conmutador repinta solo su tarjeta y no pasa por render(),
       // así que destruye sus propios gráficos o los va acumulando.
       charts.destroyIn(zona);
       zona.replaceChildren();
-      if (mostrandoTabla) charts.tabla(zona, columnas, filas);
+      if (mostrandoTabla) charts.tabla(zona, valor(columnas), valor(filas));
       else dibujarGrafico(zona);
       boton.textContent = mostrandoTabla ? 'Ver gráfico' : 'Ver tabla';
     };
     boton.addEventListener('click', () => { mostrandoTabla = !mostrandoTabla; pintar(); });
     tarjeta.appendChild(boton);
     pintar();
+    return pintar;
   }
 
   function plot(zona, id) {
@@ -917,31 +958,33 @@ const views = (() => {
 
     // Volumen, con conmutador mes / semana.
     const tVol = card('Formularios realizados', null);
+    let periodo = 'mes';
     const conmutador = document.createElement('div');
     conmutador.style.margin = '8px 0';
-    let periodo = 'mes';
-    const zonaVol = document.createElement('div');
-    const pintarVol = () => {
-      charts.destroyIn(zonaVol);
-      zonaVol.replaceChildren();
-      const s = agg.series(suyas, periodo);
-      const caja = document.createElement('div');
-      caja.className = 'plot';
-      const lienzo = document.createElement('canvas');
-      caja.appendChild(lienzo);
-      zonaVol.appendChild(caja);
-      charts.columns(lienzo, {labels: s.labels, values: s.volumen, formato: charts.num});
-    };
+    // Antes de crear la zona: conTabla la añade al final de la tarjeta y el
+    // conmutador tiene que quedar por encima del gráfico.
+    tVol.appendChild(conmutador);
+    const serieVol = () => agg.series(suyas, periodo);
+    const repintarVol = conTabla(tVol,
+      () => [{titulo: periodo === 'mes' ? 'Mes' : 'Semana'},
+             {titulo: 'Supervisiones', num: true, formato: charts.num}],
+      () => {
+        const s = serieVol();
+        return s.labels.map((l, i) => [l, s.volumen[i]]);
+      },
+      zona => {
+        const s = serieVol();
+        charts.columns(plot(zona, 'r-vol'),
+                       {labels: s.labels, values: s.volumen, formato: charts.num});
+      });
     [['mes', 'Por mes'], ['semana', 'Por semana']].forEach(([valor, texto]) => {
       const b = document.createElement('button');
       b.className = 'chip';
       b.type = 'button';
       b.textContent = texto;
-      b.addEventListener('click', () => { periodo = valor; pintarVol(); });
+      b.addEventListener('click', () => { periodo = valor; repintarVol(); });
       conmutador.appendChild(b);
     });
-    tVol.append(conmutador, zonaVol);
-    pintarVol();
     contenedor.appendChild(tVol);
 
     // Evolución con emphasis: la persona en color, el conjunto en gris.
@@ -975,25 +1018,26 @@ const views = (() => {
       let mostrando = recortado ? TOPE_BARRAS : datos.length;
       const tarjeta = card(titulo,
         recortado ? `${datos.length} valores; se muestran los ${TOPE_BARRAS} primeros.` : null);
-      const zona = document.createElement('div');
-      const pintar = () => {
-        charts.destroyIn(zona);
-        zona.replaceChildren();
-        const vista = datos.slice(0, mostrando);
-        const caja = document.createElement('div');
-        caja.className = 'plot';
-        caja.style.height = Math.max(140, vista.length * 24 + 40) + 'px';
-        const lienzo = document.createElement('canvas');
-        caja.appendChild(lienzo);
-        zona.appendChild(caja);
-        charts.bars(lienzo, {
-          labels: vista.map(e => `${e.label} (${e.total})`),
-          values: vista.map(e => e.tasa),
-          extra: vista.map(e => `${e.si} de ${e.si + e.no} con dictamen`),
-          formato: charts.pct
+      const vistaDe = () => datos.slice(0, mostrando);
+      const pintar = conTabla(tarjeta,
+        [{titulo}, {titulo: 'Supervisiones', num: true, formato: charts.num},
+         {titulo: 'Tasa', num: true, formato: charts.pct}],
+        () => vistaDe().map(e => [e.label, e.total, e.tasa]),
+        zona => {
+          const vista = vistaDe();
+          const caja = document.createElement('div');
+          caja.className = 'plot';
+          caja.style.height = Math.max(140, vista.length * 24 + 40) + 'px';
+          const lienzo = document.createElement('canvas');
+          caja.appendChild(lienzo);
+          zona.appendChild(caja);
+          charts.bars(lienzo, {
+            labels: vista.map(e => `${e.label} (${e.total})`),
+            values: vista.map(e => e.tasa),
+            extra: vista.map(e => `${e.si} de ${e.si + e.no} con dictamen`),
+            formato: charts.pct
+          });
         });
-      };
-      tarjeta.appendChild(zona);
       if (recortado) {
         const ver = document.createElement('button');
         ver.className = 'chip';
@@ -1007,7 +1051,6 @@ const views = (() => {
         });
         tarjeta.appendChild(ver);
       }
-      pintar();
       rejilla.appendChild(tarjeta);
     }
     contenedor.appendChild(rejilla);
@@ -1018,11 +1061,18 @@ const views = (() => {
     // El índice del formulario viaja como cuarta posición de la fila. `columnas`
     // solo declara tres, así que no se pinta; y al viajar con la fila sobrevive
     // a que el usuario reordene la tabla, cosa que un índice posicional no hace.
+    const sumaForm = agg.totalDe(porForm);
     charts.tabla(zonaDe(tForm),
       [{titulo: 'Formulario'}, {titulo: 'Supervisiones', num: true},
        {titulo: 'Tasa', num: true, formato: charts.pct}],
       porForm.map(e => [DATA.forms[e.label].nombre, e.total, e.tasa, e.idx]),
-      {onFila: fila => irA('formulario', fila[3])});
+      {onFila: fila => irA('formulario', fila[3]),
+       // La tasa es ponderada, así que coincide con el KPI de cumplimiento
+       // de esta misma vista.
+       // Valores en bruto: el <tfoot> aplica el formato de cada columna,
+       // igual que a las filas del cuerpo.
+       total: [`Total (${sumaForm.n} ${sumaForm.n === 1 ? 'formulario' : 'formularios'})`,
+               sumaForm.total, sumaForm.tasa]});
     contenedor.appendChild(tForm);
   }
 

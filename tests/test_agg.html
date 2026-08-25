@@ -154,6 +154,19 @@ const agg = (() => {
     };
   }
 
+  /** Fila de total para una tabla construida con `rateBy`.
+   *
+   * La tasa se pondera por volumen —se recalcula sobre la suma de dictámenes—
+   * en vez de promediar las tasas por fila. Promediarlas daría a un formulario
+   * de dos registros el mismo peso que a uno de doscientos, y el número no
+   * cuadraría con el KPI de cumplimiento de la misma vista.
+   */
+  function totalDe(entradas) {
+    let si = 0, no = 0, total = 0;
+    for (const e of entradas) { si += e.si; no += e.no; total += e.total; }
+    return {n: entradas.length, total, tasa: tasaDe(si, no)};
+  }
+
   function rateBy(rows, dimKey) {
     const etiquetas = DATA.dims[dimKey];
     const acc = new Map();
@@ -239,7 +252,7 @@ const agg = (() => {
     };
   }
 
-  return {kpis, rateBy, series, heatmap, tasaDe};
+  return {kpis, rateBy, series, heatmap, tasaDe, totalDe};
 })();
 </script>
 
@@ -278,6 +291,19 @@ check('rateBy total de Beto cuenta el sin dictamen', porResp[0].total, 2);
 check('rateBy con dictamen de Beto', porResp[0].si + porResp[0].no, 1);
 check('rateBy tasa de Carlos es 0 real, no null', porResp[2].tasa, 0);
 check('rateBy tasa de Dora es null (sin dictamen), no 0', porResp[3].tasa, null);
+
+const totalResp = agg.totalDe(porResp);
+check('totalDe cuenta las entradas', totalResp.n, 4);
+check('totalDe suma las supervisiones', totalResp.total, 9);
+// Ponderada: 3 de 6 con dictamen. El promedio simple de las tasas daria
+// (1 + 2/3 + 0) / 3 = 0.555..., que es otro numero y no coincide con kpis.
+check('totalDe pondera por volumen, no promedia tasas',
+      totalResp.tasa, 0.5);
+check('totalDe coincide con la tasa de kpis', totalResp.tasa, k.tasa);
+check('totalDe sin ningun dictamen da null, no 0',
+      agg.totalDe([{total: 2, si: 0, no: 0}]).tasa, null);
+check('totalDe de una lista vacia',
+      agg.totalDe([]), {n: 0, total: 0, tasa: null});
 
 const mes = agg.series(todas, 'mes');
 check('series etiquetas de mes', mes.labels, ['2026-07', '2026-08']);
