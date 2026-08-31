@@ -1265,6 +1265,39 @@ const views = (() => {
       });
     contenedor.appendChild(tAct);
 
+    // Cuántos casos nuevos aporta cada servicio. La tabla «Por servicio» ya
+    // trae la columna, pero mezclada con el resto de actividades; aquí va
+    // sola y ordenada por ella, que es la pregunta que se hace de verdad:
+    // de dónde salen los casos.
+    const NUEVOS = 0;  // «CASOS NUEVOS INVESTIGADOS», la primera principal.
+    const nuevosPorServicio = iaas.porDim(filas, 'servicio')
+      .map(e => ({label: e.label, casos: e.actividades[NUEVOS]}))
+      // Un servicio con cero casos nuevos no dice nada aquí y alarga la
+      // barra vertical: se queda en la tabla «Por servicio», que sí los lista.
+      .filter(e => e.casos > 0)
+      .sort((a, b) => b.casos - a.casos || a.label.localeCompare(b.label, 'es'));
+    if (nuevosPorServicio.length) {
+      const tNuevos = card(TITULO_ACTIVIDAD(acts[NUEVOS]) + ' por servicio',
+                           'Servicios sin casos nuevos en el periodo no aparecen.');
+      conTabla(tNuevos,
+        [{titulo: 'Servicio'}, {titulo: 'Casos', num: true, formato: charts.num}],
+        nuevosPorServicio.map(e => [e.label, e.casos]),
+        zona => {
+          const caja = document.createElement('div');
+          caja.className = 'plot';
+          caja.style.height = Math.max(140, nuevosPorServicio.length * 26 + 40) + 'px';
+          const lienzo = document.createElement('canvas');
+          caja.appendChild(lienzo);
+          zona.appendChild(caja);
+          charts.bars(lienzo, {
+            labels: nuevosPorServicio.map(e => e.label),
+            values: nuevosPorServicio.map(e => e.casos),
+            formato: charts.num
+          });
+        });
+      contenedor.appendChild(tNuevos);
+    }
+
     // Evolución mensual: una línea por actividad principal. Es la tarjeta
     // que responde "¿esto sube o baja?".
     const s = iaas.series(filas, 'mes');
