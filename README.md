@@ -64,6 +64,33 @@ que responda a los filtros: para filtrarlo habría que publicar un
 identificador por fila, y fecha + servicio + responsable basta para
 reidentificar a alguien.
 
+### Casos confirmados, por área
+
+La misma pestaña abre con los **casos de IAAS confirmados**, que salen de otro
+formulario: `ab9ihfUpzVx7UXnTJUvygP` ("Seguimiento Pacientes con IAAS"). Cuenta
+los envíos cuya *Definición de caso* es `Confirmado` y los reparte por la
+**ubicación del paciente**, en sus dos niveles: unidad/servicio (`Ubi1`) y
+subservicio (`Ubi2`–`Ubi8`, la que esté contestada).
+
+El área es dónde está el paciente, no dónde se adquirió la infección. El
+formulario también registra el lugar de origen, pero solo para las
+intrahospitalarias: en el resto viene vacío, y un desglose con un tercio de
+huecos se lee mal.
+
+Ese formulario repite etiquetas —"Unidad/servicio" aparece en la ubicación del
+paciente y otra vez en el lugar de origen—, así que sus campos se mapean por
+**nombre de pregunta**, no por etiqueta como los de producción. Un mapa por
+etiqueta se quedaría con una de las dos en silencio.
+
+De él solo se publican fecha de notificación, unidad y subservicio: tres
+columnas. Nombre, expediente, diagnóstico y observaciones no salen del proceso
+de construcción, y una prueba lo comprueba.
+
+Se descarga y falla por su cuenta: si su esquema cambia, el resto de la pestaña
+se sigue publicando, y al revés. Solo el rango de fechas filtra estas tarjetas
+—responsable, servicio y actividad son dimensiones del formulario de
+producción, que no existen en este—, y la propia tarjeta lo dice.
+
 ## Generar el dashboard en tu equipo
 
 Una vez, para preparar el entorno:

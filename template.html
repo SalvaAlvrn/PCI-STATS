@@ -1204,7 +1204,99 @@ const views = (() => {
   const TITULO_ACTIVIDAD = etiqueta =>
     etiqueta.charAt(0) + etiqueta.slice(1).toLowerCase();
 
+  /** Recuento de casos confirmados por dimensión, solo con el filtro de fechas.
+   *
+   * Los otros filtros de la pestaña —responsable, servicio, actividad— son del
+   * formulario de producción y no existen en el de casos. Aplicarlos aquí daría
+   * un número que no significa nada, así que las tarjetas de casos lo dicen en
+   * vez de fingir que están filtradas.
+   */
+  function casosPorDim(casos, clave, f) {
+    const r = casos.rows;
+    const cuenta = new Map();
+    let total = 0;
+    for (let i = 0; i < r.dia.length; i++) {
+      if (f.desde !== null && r.dia[i] < f.desde) continue;
+      if (f.hasta !== null && r.dia[i] > f.hasta) continue;
+      total++;
+      const k = r[clave][i];
+      cuenta.set(k, (cuenta.get(k) || 0) + 1);
+    }
+    const filas = [...cuenta].map(([k, n]) => ({label: casos.dims[clave][k], casos: n}));
+    // Más casos arriba; a igualdad, alfabético para que no baile entre builds.
+    filas.sort((a, b) => b.casos - a.casos || a.label.localeCompare(b.label, 'es'));
+    return {filas, total};
+  }
+
+  /** Tarjeta de casos confirmados por área, con gráfico y tabla. */
+  function tarjetaCasos(titulo, subtitulo, datos) {
+    const tarjeta = card(titulo, subtitulo);
+    conTabla(tarjeta,
+      [{titulo: 'Área'}, {titulo: 'Casos', num: true, formato: charts.num}],
+      datos.map(e => [e.label, e.casos]),
+      zona => {
+        const caja = document.createElement('div');
+        caja.className = 'plot';
+        caja.style.height = Math.max(140, datos.length * 26 + 40) + 'px';
+        const lienzo = document.createElement('canvas');
+        caja.appendChild(lienzo);
+        zona.appendChild(caja);
+        charts.bars(lienzo, {
+          labels: datos.map(e => e.label),
+          values: datos.map(e => e.casos),
+          formato: charts.num
+        });
+      });
+    return tarjeta;
+  }
+
+  /** Casos de IAAS confirmados, por unidad y por subservicio.
+   *
+   * Fuente distinta a la de producción —otro formulario de Kobo—, así que se
+   * pinta antes y aparte: si el de producción falla, esto se sigue viendo.
+   */
+  function renderCasos() {
+    const casos = DATA.iaas.casos;
+    if (!casos) return;
+    if (!casos.ok) {
+      contenedor.appendChild(vacio(
+        'Casos confirmados no disponibles: ' + casos.error +
+        (casos.fecha ? ' (último intento: ' + casos.fecha + ')' : '')));
+      return;
+    }
+    const f = storeIaas.filters;
+    const unidades = casosPorDim(casos, 'unidad', f);
+    const sub = casosPorDim(casos, 'subservicio', f);
+
+    const fila = document.createElement('div');
+    fila.className = 'kpis';
+    fila.style.marginBottom = '16px';
+    fila.appendChild(kpi('IAAS confirmadas', charts.num(unidades.total)));
+    fila.appendChild(kpi('Unidades con casos', charts.num(unidades.filas.length)));
+    contenedor.appendChild(fila);
+
+    const nota = document.createElement('div');
+    nota.className = 'sub';
+    nota.style.marginBottom = '16px';
+    nota.textContent = 'Casos con «Definición de caso: Confirmado», por la ' +
+      'ubicación del paciente. Solo el rango de fechas filtra estas tarjetas: ' +
+      'responsable, servicio y actividad son del formulario de producción.';
+    contenedor.appendChild(nota);
+
+    if (!unidades.total) {
+      contenedor.appendChild(vacio('Sin casos confirmados en este rango de fechas.'));
+      return;
+    }
+    contenedor.appendChild(tarjetaCasos(
+      'IAAS confirmadas por unidad', 'Unidad o servicio donde está el paciente.',
+      unidades.filas));
+    contenedor.appendChild(tarjetaCasos(
+      'IAAS confirmadas por subservicio', 'El segundo nivel del área.',
+      sub.filas));
+  }
+
   function renderIaas() {
+    renderCasos();
     if (!DATA.iaas.ok) {
       // La pestaña sigue existiendo y dice por qué no hay datos: si
       // desapareciera, un fallo de Kobo pasaría por "aquí nunca hubo nada".

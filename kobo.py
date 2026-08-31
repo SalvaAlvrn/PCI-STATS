@@ -26,6 +26,10 @@ class KoboError(Exception):
 
 KOBO_SERVIDOR = "kf.kobotoolbox.org"
 KOBO_ASSET_UID = "aefXsYwJo5RsrZYfaCEcva"
+# Los casos investigados viven en otro formulario, con otra estructura y
+# otra cadencia. Se descarga aparte para que un cambio en uno no deje sin
+# datos al otro.
+KOBO_ASSET_CASOS = "ab9ihfUpzVx7UXnTJUvygP"
 TIMEOUT_SEGUNDOS = 60
 
 CAMPOS = {
@@ -284,6 +288,197 @@ def construir(token, servidor=KOBO_SERVIDOR, uid=KOBO_ASSET_UID):
             "generado": pd.Timestamp.now(tz="UTC").strftime("%Y-%m-%d %H:%M UTC"),
             "filas": len(filas),
             "pacientes": pacientes,
+            "dia_min": min(dias) if dias else 0,
+            "dia_max": max(dias) if dias else 0,
+        },
+    }
+
+# ---------------------------------------------------------------------------
+# Casos de IAAS confirmados, del formulario «Seguimiento Pacientes con IAAS».
+# ---------------------------------------------------------------------------
+#
+# Aquí se mapea por nombre de pregunta y no por etiqueta como en el formulario
+# de producción: este repite etiquetas —«Unidad/servicio» aparece en la
+# ubicación del paciente y otra vez en el lugar de origen de la IAAS— y un mapa
+# por etiqueta se quedaría con una de las dos, en silencio y sin poder saber
+# con cuál.
+
+CAMPOS_CASOS = {
+    "fecha": "Fecha_de_notificaci_n",
+    "definicion": "Definici_n_de_caso",
+    "unidad": "Ubi1",
+}
+
+# El área se registra en dos niveles: `Ubi1` dice la unidad, y una de estas
+# preguntas —solo una, la que corresponda a esa unidad— dice el subservicio.
+SUBSERVICIOS = ["Ubi2", "Ubi3", "Ubi4", "Ubi5", "Ubi6", "Ubi7", "Ubi8"]
+
+# La opción de «Definición de caso» que cuenta. Se busca por etiqueta porque el
+# nombre interno de la opción es lo que cambia si alguien rehace la lista.
+ETIQUETA_CONFIRMADO = "Confirmado"
+
+SIN_AREA = "(Sin registrar)"
+
+# Igual que CAMPOS_PROHIBIDOS, pero para el formulario de casos: la prueba
+# comprueba que ninguno de estos llega al HTML.
+CAMPOS_CASOS_PROHIBIDOS = [
+    "Nombre_del_paciente",
+    "Expediente",
+    "Diagn_stico_CIE_10",
+    "Observaciones",
+    "N_de_cama",
+]
+
+
+def mapa_por_nombre(esquema):
+    """Nombre de pregunta → {ruta, lista}, con la ruta tal como llega al envío."""
+    survey = esquema.get("content", {}).get("survey")
+    if not survey:
+        raise KoboError(
+            "El esquema del formulario de casos llegó sin «content.survey». "
+            "Comprueba el asset uid."
+        )
+    mapa = {}
+    grupos = []
+    for campo in survey:
+        tipo = campo.get("type")
+        if tipo in ("begin_group", "begin_score", "begin_repeat"):
+            grupos.append(campo.get("name") or campo.get("$autoname", ""))
+            continue
+        if tipo in ("end_group", "end_score", "end_repeat"):
+            if grupos:
+                grupos.pop()
+            continue
+        nombre = campo.get("name") or campo.get("$autoname")
+        if not nombre:
+            continue
+        mapa[nombre] = {
+            "ruta": campo.get("$xpath") or "/".join([*grupos, nombre]),
+            "lista": campo.get("select_from_list_name"),
+        }
+    return mapa
+
+
+def choices_por_lista(esquema):
+    """Nombre de lista → {nombre de opción: etiqueta}."""
+    salida = {}
+    for opcion in esquema.get("content", {}).get("choices", []):
+        lista = opcion.get("list_name")
+        nombre = opcion.get("name")
+        if not lista or not nombre:
+            continue
+        etiquetas = opcion.get("label") or [nombre]
+        salida.setdefault(lista, {})[nombre] = str(etiquetas[0]).strip()
+    return salida
+
+
+def _opcion_confirmado(mapa, choices):
+    """Nombre interno de la opción «Confirmado» de «Definición de caso»."""
+    lista = mapa[CAMPOS_CASOS["definicion"]]["lista"]
+    opciones = choices.get(lista, {})
+    for nombre, etiqueta in opciones.items():
+        if normalizar(etiqueta) == normalizar(ETIQUETA_CONFIRMADO):
+            return nombre
+    raise KoboError(
+        "«Definición de caso» ya no ofrece la opción "
+        f"«{ETIQUETA_CONFIRMADO}»: {sorted(opciones.values())}."
+    )
+
+
+def validar_casos(esquema):
+    """Comprueba el manifiesto del formulario de casos y devuelve su mapa."""
+    mapa = mapa_por_nombre(esquema)
+    faltan = [n for n in CAMPOS_CASOS.values() if n not in mapa]
+    if faltan:
+        raise KoboError(
+            "El formulario de casos de Kobo ya no tiene la forma esperada. No "
+            f"se encontraron estas preguntas: {faltan}. Si las renombraste en "
+            "Kobo, actualiza el manifiesto de kobo.py."
+        )
+    _opcion_confirmado(mapa, choices_por_lista(esquema))
+    return mapa
+
+
+def limpiar_casos(envios, mapa, choices):
+    """Filas de los casos confirmados: fecha, unidad y subservicio.
+
+    Solo esas tres columnas salen del envío. El formulario trae nombre,
+    expediente y diagnóstico del paciente; nada de eso se copia, igual que en
+    el apartado de producción.
+    """
+    confirmado = _opcion_confirmado(mapa, choices)
+    ruta = {clave: mapa[nombre]["ruta"] for clave, nombre in CAMPOS_CASOS.items()}
+    etiqueta_unidad = choices.get(mapa[CAMPOS_CASOS["unidad"]]["lista"], {})
+    # Cada subservicio tiene su propia lista de opciones; se guarda junto a su
+    # ruta para poder etiquetar el valor sin volver al esquema.
+    subs = [(mapa[n]["ruta"], choices.get(mapa[n]["lista"], {}))
+            for n in SUBSERVICIOS if n in mapa]
+
+    filas = []
+    for envio in envios:
+        if str(envio.get(ruta["definicion"], "")).strip() != confirmado:
+            continue
+        crudo = str(envio.get(ruta["fecha"], "")).strip()
+        fecha = crudo[:10]
+        if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", fecha):
+            raise KoboError(
+                "Un caso confirmado trae una fecha de notificación ilegible: "
+                f"{crudo!r}."
+            )
+        unidad = str(envio.get(ruta["unidad"], "")).strip()
+        subservicio = ""
+        for ruta_sub, etiquetas_sub in subs:
+            valor = str(envio.get(ruta_sub, "")).strip()
+            if valor:
+                subservicio = etiquetas_sub.get(valor, valor)
+                break
+        filas.append({
+            "fecha": fecha,
+            "unidad": etiqueta_unidad.get(unidad, unidad) or SIN_AREA,
+            "subservicio": subservicio or SIN_AREA,
+        })
+    return filas
+
+
+def construir_casos(token, servidor=KOBO_SERVIDOR, uid=KOBO_ASSET_CASOS):
+    """Descarga, valida, limpia y codifica. Devuelve el bloque DATA.iaas.casos."""
+    esquema, envios = descargar(token, servidor, uid)
+    mapa = validar_casos(esquema)
+    filas = limpiar_casos(envios, mapa, choices_por_lista(esquema))
+
+    # Envíos que existen y ni uno confirmado significa que la opción dejó de
+    # emparejar, no que no haya habido IAAS: el campo es obligatorio. Sin esta
+    # comprobación el apartado publicaría un cero limpio y creíble.
+    if envios and not filas:
+        raise KoboError(
+            f"Ninguno de los {len(envios)} casos del formulario está marcado "
+            f"como «{ETIQUETA_CONFIRMADO}». La lista de opciones dejó de "
+            "coincidir con el manifiesto de kobo.py."
+        )
+
+    fechas = (pd.to_datetime([f["fecha"] for f in filas])
+              if filas else pd.DatetimeIndex([]))
+    dias = [int(d.to_datetime64().astype("datetime64[D]").astype("int64"))
+            for d in fechas]
+
+    dims = {}
+    rows = {}
+    for clave in ("unidad", "subservicio"):
+        valores = [f[clave] for f in filas]
+        # Orden alfabético, igual que el resto de dimensiones: el archivo debe
+        # salir idéntico entre builds con los mismos datos.
+        categorias = sorted(set(valores))
+        indice = {v: i for i, v in enumerate(categorias)}
+        dims[clave] = categorias
+        rows[clave] = [indice[v] for v in valores]
+    rows["dia"] = dias
+
+    return {
+        "ok": True,
+        "dims": dims,
+        "rows": rows,
+        "meta": {
+            "casos": len(filas),
             "dia_min": min(dias) if dias else 0,
             "dia_max": max(dias) if dias else 0,
         },

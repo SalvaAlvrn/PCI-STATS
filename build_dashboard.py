@@ -537,6 +537,22 @@ def main(argv=None):
         print(f"AVISO: no se pudo construir el apartado de IAAS: {error}",
               file=sys.stderr)
 
+    # Los casos confirmados son otro formulario y fallan por su cuenta: si su
+    # esquema cambia, el resto del apartado de IAAS se sigue publicando.
+    try:
+        casos = kobo.construir_casos(os.environ.get("KOBO_TOKEN", ""))
+        print(f"IAAS: {casos['meta']['casos']} casos confirmados en "
+              f"{len(casos['dims']['unidad'])} unidades")
+    except kobo.KoboError as error:
+        casos = {
+            "ok": False,
+            "error": str(error),
+            "fecha": pd.Timestamp.now(tz="UTC").strftime("%Y-%m-%d %H:%M UTC"),
+        }
+        print(f"AVISO: no se pudieron construir los casos confirmados: {error}",
+              file=sys.stderr)
+    iaas["casos"] = casos
+
     data = encode(limpio, formularios, iaas=iaas)
     escritos = render_html(
         data, raiz / "template.html", raiz / "vendor" / "chart.umd.min.js", salida
