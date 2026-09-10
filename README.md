@@ -112,6 +112,11 @@ El apartado mide **vigilancia epidemiológica**, no producción de PCI:
   (`LUGAR_ORIGEN_EXTRA`) **no se publica**: es texto libre, y en una página
   pública eso es una fuga esperando a que alguien escriba ahí un nombre. Para
   recuperarlo, el sistema tendría que convertir el campo en lista de opciones.
+- **Señales** — posibles conglomerados (3 o más casos confirmados del mismo
+  microorganismo, mismo servicio, dentro de 14 días) y curva epidémica semanal
+  con umbral de media móvil de 6 semanas más dos desviaciones típicas. Con
+  recuentos de este tamaño el umbral es orientativo: señala variación inusual,
+  no prueba un brote, y las tarjetas lo dicen.
 - **Microbiología** — microorganismos aislados y su cruce con el servicio, que
   es donde se ve un conglomerado antes de que alguien lo llame brote.
 - **Dispositivos** — casos, días de exposición registrados, densidad por 1.000
@@ -124,6 +129,16 @@ El apartado mide **vigilancia epidemiológica**, no producción de PCI:
   raíz y enfermedades crónicas de base.
 - **Calidad del registro** — la última tarjeta cuenta los huecos: cada uno es
   un caso que no entra en alguna de las tarjetas de arriba.
+
+El KPI «Último mes» compara el mes más reciente con la media de los anteriores,
+y avisa cuando ese mes está en curso: un mes a medias siempre parece una caída.
+La evolución conmuta entre mes y semana. Al filtrar por fechas, la pestaña dice
+cuántos casos quedan fuera por no tener fecha de notificación, en vez de dejar
+que el total baje sin explicación.
+
+El botón **Descargar CSV** baja exactamente lo que los filtros dejan a la vista,
+con las mismas columnas que la pestaña ya publica —ninguna más—, para escribir
+el informe mensual sin copiar cifras a mano de la pantalla.
 
 ### Fechas perdidas en la migración
 

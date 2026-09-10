@@ -394,6 +394,17 @@ function crearVigilancia(vig) {
   // Dimensiones de varios valores por caso; viajan como matriz etiqueta×caso.
   const MATRICES = ['microorganismo', 'dispositivo', 'causa'];
 
+  /** ¿Pasa el caso los filtros que no son de fecha? */
+  function pasaDimensiones(f, i) {
+    for (const clave of SIMPLES) {
+      if (f[clave] != null && r[clave][i] !== f[clave]) return false;
+    }
+    for (const clave of MATRICES) {
+      if (f[clave] != null && r[clave][f[clave]][i] !== 1) return false;
+    }
+    return true;
+  }
+
   function filasActivas(f) {
     const out = [];
     for (let i = 0; i < n; i++) {
@@ -402,18 +413,24 @@ function crearVigilancia(vig) {
       if ((f.desde !== null || f.hasta !== null) && r.dia[i] === null) continue;
       if (f.desde !== null && r.dia[i] < f.desde) continue;
       if (f.hasta !== null && r.dia[i] > f.hasta) continue;
-      let fuera = false;
-      for (const clave of SIMPLES) {
-        if (f[clave] != null && r[clave][i] !== f[clave]) { fuera = true; break; }
-      }
-      if (fuera) continue;
-      for (const clave of MATRICES) {
-        if (f[clave] != null && r[clave][f[clave]][i] !== 1) { fuera = true; break; }
-      }
-      if (fuera) continue;
+      if (!pasaDimensiones(f, i)) continue;
       out.push(i);
     }
     return out;
+  }
+
+  /** Casos que el filtro de fechas deja fuera por no tener fecha.
+   *
+   * Cumplen el resto de filtros y aun así no aparecen. Sin decirlo, el total
+   * de la pestaña baja al filtrar por fechas y parece que hubo menos casos.
+   */
+  function excluidosPorFecha(f) {
+    if (f.desde === null && f.hasta === null) return 0;
+    let fuera = 0;
+    for (let i = 0; i < n; i++) {
+      if (r.dia[i] === null && pasaDimensiones(f, i)) fuera++;
+    }
+    return fuera;
   }
 
   const esConfirmado = i => r.definicion[i] === iConfirmado;
@@ -580,8 +597,122 @@ function crearVigilancia(vig) {
             columnas: etiquetasCol};
   }
 
+  /** Variación del último periodo frente a la media de los anteriores.
+   *
+   * Un recuento suelto no dice si la cosa va a mejor o a peor, que es lo
+   * primero que se pregunta quien abre el tablero.
+   */
+  function variacion(filas, periodo) {
+    const s = serie(filas, periodo);
+    if (s.labels.length < 2) return null;
+    const ultimo = s.labels.length - 1;
+    const previos = s.confirmados.slice(0, ultimo);
+    const media = previos.reduce((a, b) => a + b, 0) / previos.length;
+    const hoy = new Date();
+    const mesActual = hoy.getFullYear() + '-' +
+      String(hoy.getMonth() + 1).padStart(2, '0');
+    return {
+      etiqueta: s.labels[ultimo], valor: s.confirmados[ultimo], media,
+      // Un mes a medias siempre parece una caída: hay que decirlo, no
+      // esconderlo ni excluirlo.
+      enCurso: s.labels[ultimo] === mesActual
+    };
+  }
+
+  const MS_DIA = 86400000;
+  // El día 0 de la época fue jueves; restar (dia+3)%7 cae en su lunes.
+  const lunesDe = dia => dia - ((dia + 3) % 7);
+
+  /** Curva epidémica semanal con umbral de media móvil + 2 DE.
+   *
+   * El eje se construye desde las fechas y no desde `dims.semana`: así las
+   * semanas sin ningún caso salen como cero en lugar de desaparecer, que es
+   * justo lo que haría que una subida pareciera plana.
+   */
+  function curva(filas, ventana) {
+    const dias = [];
+    for (const i of confirmados(filas)) if (r.dia[i] !== null) dias.push(r.dia[i]);
+    if (!dias.length) return {semanas: []};
+    const inicio = lunesDe(Math.min(...dias));
+    const fin = lunesDe(Math.max(...dias));
+    const cuenta = new Map();
+    for (const d of dias) {
+      const k = lunesDe(d);
+      cuenta.set(k, (cuenta.get(k) || 0) + 1);
+    }
+    const semanas = [];
+    for (let d = inicio; d <= fin; d += 7) {
+      const casos = cuenta.get(d) || 0;
+      const base = semanas.slice(-ventana).map(s => s.casos);
+      let media = null, umbral = null;
+      // Con una o dos semanas detrás, la desviación no significa nada: se
+      // deja sin umbral en vez de inventar una línea que nadie puede leer.
+      if (base.length >= 3) {
+        media = base.reduce((a, b) => a + b, 0) / base.length;
+        const varianza = base.reduce((a, b) => a + (b - media) ** 2, 0) / base.length;
+        umbral = media + 2 * Math.sqrt(varianza);
+      }
+      semanas.push({
+        dia: d, label: fechaCorta(d), casos, media, umbral,
+        alerta: umbral !== null && casos > umbral
+      });
+    }
+    return {semanas};
+  }
+
+  const fechaCorta = dia => new Date(dia * MS_DIA)
+    .toLocaleDateString('es', {day: '2-digit', month: '2-digit'});
+  const fechaLarga = dia => new Date(dia * MS_DIA).toISOString().slice(0, 10);
+
+  /** Conglomerados: mismo servicio y microorganismo en pocos días.
+   *
+   * No prueba un brote —para eso hace falta tipificación y una investigación
+   * de campo—, pero es la señal que hay que mirar antes de que se convierta
+   * en uno.
+   */
+  function conglomerados(filas, ventana, minimo) {
+    const servicios = vig.dims.servicio;
+    const micros = vig.dims.microorganismo;
+    const grupos = new Map();
+    for (const i of confirmados(filas)) {
+      if (r.dia[i] === null) continue;
+      for (let k = 0; k < micros.length; k++) {
+        if (r.microorganismo[k][i] !== 1) continue;
+        const clave = r.servicio[i] + '|' + k;
+        if (!grupos.has(clave)) grupos.set(clave, []);
+        grupos.get(clave).push(r.dia[i]);
+      }
+    }
+    const salida = [];
+    for (const [clave, dias] of grupos) {
+      if (dias.length < minimo) continue;
+      dias.sort((a, b) => a - b);
+      // Ventana deslizante: la racha más apretada que alcanza el mínimo.
+      let mejor = null;
+      for (let a = 0; a < dias.length; a++) {
+        let b = a;
+        while (b + 1 < dias.length && dias[b + 1] - dias[a] <= ventana) b++;
+        const casos = b - a + 1;
+        if (casos >= minimo && (!mejor || casos > mejor.casos)) {
+          mejor = {casos, desde: dias[a], hasta: dias[b]};
+        }
+      }
+      if (!mejor) continue;
+      const [servicio, k] = clave.split('|');
+      salida.push({
+        servicio: servicios[servicio], microorganismo: micros[Number(k)],
+        casos: mejor.casos, desde: fechaLarga(mejor.desde),
+        hasta: fechaLarga(mejor.hasta),
+        dias: mejor.hasta - mejor.desde
+      });
+    }
+    return salida.sort((a, b) => b.casos - a.casos || a.dias - b.dias ||
+                                 a.servicio.localeCompare(b.servicio, 'es'));
+  }
+
   return {filasActivas, confirmados, kpis, embudo, porDim, porMulti, porDimCon,
-          serie, dispositivos, intervalo, cruce};
+          serie, dispositivos, intervalo, cruce, excluidosPorFecha, variacion,
+          curva, conglomerados};
 }
 </script>
 <script id="mod-iaas">
@@ -1736,6 +1867,79 @@ const views = (() => {
   const dias = v => v === null ? '—' : charts.num(v) + ' d';
   const decimales = v => v === null ? '—' : v.toFixed(2);
 
+  // Un conglomerado es una señal, no un diagnóstico: los umbrales son los que
+  // usa vigilancia para decidir a qué mirar, no una definición de brote.
+  const VENTANA_CONGLOMERADO = 14;
+  const MINIMO_CONGLOMERADO = 3;
+  // Seis semanas de historia para el umbral: menos lo hace saltar con
+  // cualquier racha, más tarda en reaccionar a un cambio real.
+  const VENTANA_UMBRAL = 6;
+
+  /** Columnas del CSV. Son las mismas que ya se publican en el HTML: la
+   *  descarga no puede sacar nada que la pestaña no enseñe. */
+  const COLUMNAS_CSV = [
+    ['fecha', 'Fecha de notificación'], ['definicion', 'Definición'],
+    ['servicio', 'Servicio'], ['ubicacion', 'Ubicación'],
+    ['diagnostico', 'Diagnóstico IAAS'], ['origen', 'Origen'],
+    ['condicion', 'Condición'], ['vigepes', 'VIGEPES-08'],
+    ['sexo', 'Sexo'], ['edad', 'Edad'],
+    ['microorganismo', 'Microorganismos'], ['dispositivo', 'Dispositivos'],
+    ['causa', 'Causa raíz'], ['deteccion', 'Días ingreso-notificación'],
+    ['a_investigacion', 'Días notificación-investigación'],
+    ['a_vigepes', 'Días notificación-VIGEPES']
+  ];
+
+  /** Botón que baja como CSV exactamente lo que los filtros dejan a la vista.
+   *
+   * El informe mensual se escribe fuera del dashboard; sin esto, las cifras se
+   * copian a mano de la pantalla, que es donde se cuelan los errores.
+   */
+  function botonCsv(filas) {
+    const boton = document.createElement('button');
+    boton.className = 'chip';
+    boton.type = 'button';
+    boton.style.marginBottom = '16px';
+    boton.textContent = 'Descargar CSV (' + charts.num(filas.length) + ' casos)';
+    boton.addEventListener('click', () => {
+      const r = DATA.vigilancia.rows;
+      const dims = DATA.vigilancia.dims;
+      const MS = 86400000;
+      const escapar = valor => {
+        const texto = valor === null || valor === undefined ? '' : String(valor);
+        return /[",\n;]/.test(texto) ? '"' + texto.replace(/"/g, '""') + '"'
+                                     : texto;
+      };
+      const lineas = [COLUMNAS_CSV.map(c => escapar(c[1])).join(',')];
+      for (const i of filas) {
+        const celdas = COLUMNAS_CSV.map(([clave]) => {
+          if (clave === 'fecha') {
+            return r.dia[i] === null ? ''
+              : new Date(r.dia[i] * MS).toISOString().slice(0, 10);
+          }
+          if (Array.isArray(r[clave][0])) {
+            // Dimensión matriz: se juntan las etiquetas marcadas del caso.
+            return dims[clave].filter((_, k) => r[clave][k][i] === 1).join(' | ');
+          }
+          const valor = r[clave][i];
+          return dims[clave] ? dims[clave][valor] : valor;
+        });
+        lineas.push(celdas.map(escapar).join(','));
+      }
+      // BOM: sin él Excel abre los acentos rotos, que es como se abre siempre.
+      const blob = new Blob(['\ufeff' + lineas.join('\r\n')],
+                            {type: 'text/csv;charset=utf-8'});
+      const url = URL.createObjectURL(blob);
+      const enlace = document.createElement('a');
+      enlace.href = url;
+      enlace.download = 'vigilancia-iaas.csv';
+      enlace.click();
+      // Revocar en el mismo turno corta la descarga a medias en algunos
+      // navegadores: se libera cuando el clic ya se ha procesado.
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+    });
+    return boton;
+  }
+
   function renderVigilancia() {
     if (!DATA.vigilancia.ok) {
       // La pestaña sigue existiendo y dice por qué no hay datos: si
@@ -1757,9 +1961,19 @@ const views = (() => {
     const cabecera = document.createElement('div');
     cabecera.className = 'kpis';
     cabecera.style.marginBottom = '16px';
+    // La variación del último mes: un recuento suelto no dice si sube o baja.
+    const v = vigilancia.variacion(filas, 'mes');
+    const textoVariacion = v && v.media > 0
+      ? v.etiqueta + ': ' + charts.num(v.valor) + ' frente a ' +
+        v.media.toFixed(1) + ' de media previa' +
+        (v.enCurso ? ' · mes en curso' : '')
+      : null;
     cabecera.appendChild(kpi('Casos notificados', charts.num(k.casos)));
     cabecera.appendChild(kpi('IAAS confirmadas', charts.num(k.confirmados),
                              charts.pct(k.confirmacion) + ' de lo notificado'));
+    if (textoVariacion) {
+      cabecera.appendChild(kpi('Último mes', charts.num(v.valor), textoVariacion));
+    }
     cabecera.appendChild(kpi('Letalidad', charts.pct(k.letalidad),
                              charts.num(k.fallecidos) + ' fallecidos'));
     cabecera.appendChild(kpi('VIGEPES-08 pendiente', charts.num(k.pendientes)));
@@ -1779,6 +1993,42 @@ const views = (() => {
       'calculan solo sobre los casos confirmados.';
     contenedor.appendChild(nota);
 
+    // Los casos sin fecha desaparecen al filtrar por fechas. Callarlo haría
+    // pasar por "hubo menos casos" lo que en realidad es un hueco del registro.
+    const fuera = vigilancia.excluidosPorFecha(storeVig.filters);
+    if (fuera) {
+      const aviso = document.createElement('div');
+      aviso.className = 'sub';
+      aviso.style.marginBottom = '16px';
+      aviso.textContent = fuera === 1
+        ? '1 caso cumple el resto de filtros pero no tiene fecha de ' +
+          'notificación, así que el rango de fechas lo deja fuera.'
+        : charts.num(fuera) + ' casos cumplen el resto de filtros pero no ' +
+          'tienen fecha de notificación, así que el rango de fechas los deja ' +
+          'fuera.';
+      contenedor.appendChild(aviso);
+    }
+
+    contenedor.appendChild(botonCsv(filas));
+
+    // --- Señales que hay que mirar antes que nada -------------------------
+    const grupos = vigilancia.conglomerados(filas, VENTANA_CONGLOMERADO,
+                                            MINIMO_CONGLOMERADO);
+    if (grupos.length) {
+      contenedor.appendChild(tarjetaTabla(
+        'Posibles conglomerados',
+        MINIMO_CONGLOMERADO + ' o más casos confirmados del mismo ' +
+        'microorganismo, en el mismo servicio, dentro de ' +
+        VENTANA_CONGLOMERADO + ' días. No prueba un brote: es lo que hay que ' +
+        'mirar de cerca antes de que lo sea.',
+        [{titulo: 'Servicio'}, {titulo: 'Microorganismo'},
+         {titulo: 'Casos', num: true, formato: charts.num},
+         {titulo: 'Días', num: true, formato: charts.num},
+         {titulo: 'Desde'}, {titulo: 'Hasta'}],
+        grupos.map(g => [g.servicio, g.microorganismo, g.casos, g.dias,
+                         g.desde, g.hasta])));
+    }
+
     // --- Proceso de vigilancia -------------------------------------------
     const emb = vigilancia.embudo(filas);
     contenedor.appendChild(tarjetaRanking(
@@ -1787,25 +2037,80 @@ const views = (() => {
       'suman: un caso está en varias.',
       emb, 'Etapa'));
 
-    const s = vigilancia.serie(filas, 'mes');
-    const tEvo = card('Evolución mensual',
+    const tEvo = card('Evolución',
                       'Casos confirmados frente al resto de notificaciones.');
-    conTabla(tEvo,
-      [{titulo: 'Mes'},
-       {titulo: 'Confirmados', num: true, formato: charts.num},
-       {titulo: 'Otros', num: true, formato: charts.num}],
-      s.labels.map((l, i) => [l, s.confirmados[i], s.otros[i]]),
-      zona => charts.line(plot(zona, 'i-evo'), {
-        labels: s.labels,
-        formato: charts.num,
-        series: [
-          {label: 'Confirmados', data: s.confirmados,
-           color: charts.token('series-1')},
-          {label: 'Sospechosos y descartados', data: s.otros,
-           color: charts.token('series-2')}
-        ]
-      }));
+    let periodo = 'mes';
+    const conmutador = document.createElement('div');
+    conmutador.style.margin = '8px 0';
+    // Antes de crear la zona: conTabla la añade al final de la tarjeta y el
+    // conmutador tiene que quedar por encima del gráfico.
+    tEvo.appendChild(conmutador);
+    const serieEvo = () => vigilancia.serie(filas, periodo);
+    const repintarEvo = conTabla(tEvo,
+      () => [{titulo: periodo === 'mes' ? 'Mes' : 'Semana'},
+             {titulo: 'Confirmados', num: true, formato: charts.num},
+             {titulo: 'Otros', num: true, formato: charts.num}],
+      () => {
+        const s = serieEvo();
+        return s.labels.map((l, i) => [l, s.confirmados[i], s.otros[i]]);
+      },
+      zona => {
+        const s = serieEvo();
+        charts.line(plot(zona, 'v-evo'), {
+          labels: s.labels,
+          formato: charts.num,
+          series: [
+            {label: 'Confirmados', data: s.confirmados,
+             color: charts.token('series-1')},
+            {label: 'Sospechosos y descartados', data: s.otros,
+             color: charts.token('series-2')}
+          ]
+        });
+      });
+    [['mes', 'Por mes'], ['semana', 'Por semana']].forEach(([valor, texto]) => {
+      const b = document.createElement('button');
+      b.className = 'chip';
+      b.type = 'button';
+      b.textContent = texto;
+      b.addEventListener('click', () => { periodo = valor; repintarEvo(); });
+      conmutador.appendChild(b);
+    });
     contenedor.appendChild(tEvo);
+
+    // Curva epidémica: la pregunta no es cuántos casos hay, sino si esta
+    // semana se sale de lo que venían siendo las anteriores.
+    const semanas = vigilancia.curva(filas, VENTANA_UMBRAL).semanas;
+    const conUmbral = semanas.filter(s => s.umbral !== null);
+    if (conUmbral.length >= 2) {
+      const alertas = semanas.filter(s => s.alerta).length;
+      const tCurva = card(
+        'Curva epidémica semanal',
+        'Casos confirmados por semana y umbral de aviso: media de las ' +
+        VENTANA_UMBRAL + ' semanas previas más dos desviaciones típicas. Con ' +
+        'recuentos tan pequeños el umbral es orientativo — señala variación ' +
+        'inusual, no brote. Las primeras semanas no tienen historia detrás y ' +
+        'salen sin umbral.' +
+        (alertas ? ' Semanas por encima del umbral: ' + alertas + '.' : ''));
+      conTabla(tCurva,
+        [{titulo: 'Semana (lunes)'},
+         {titulo: 'Casos', num: true, formato: charts.num},
+         {titulo: 'Media previa', num: true, formato: decimales},
+         {titulo: 'Umbral', num: true, formato: decimales},
+         {titulo: 'Aviso'}],
+        semanas.map(s => [s.label, s.casos, s.media, s.umbral,
+                          s.alerta ? '▲' : '']),
+        zona => charts.line(plot(zona, 'v-curva'), {
+          labels: semanas.map(s => s.label),
+          formato: charts.num,
+          series: [
+            {label: 'Casos', data: semanas.map(s => s.casos),
+             color: charts.token('series-1')},
+            {label: 'Umbral', data: semanas.map(s => s.umbral),
+             color: charts.token('series-3')}
+          ]
+        }));
+      contenedor.appendChild(tCurva);
+    }
 
     const oportunidad = [
       ['Ingreso → notificación', vigilancia.intervalo(filas, 'deteccion')],
