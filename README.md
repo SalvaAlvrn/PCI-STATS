@@ -30,66 +30,85 @@ rompió— el workflow se detiene y **no publica**: la URL sigue mostrando la ú
 versión buena. Es deliberado: el dashboard prefiere estar desactualizado a
 mostrar cifras equivocadas.
 
-## El apartado de investigación de IAAS
+## El apartado de vigilancia de IAAS
 
-La pestaña "Investigación de IAAS" se alimenta del formulario de KoboToolbox
-`aefXsYwJo5RsrZYfaCEcva` en `kf.kobotoolbox.org`, leído en cada ejecución del
-workflow.
+La pestaña "Vigilancia de IAAS" se alimenta del libro **Sistema IAAS v6.5** de
+la Unidad de Epidemiología, en Google Sheets
+(`1fpUICeal47RTZeWwpyD_gR21yjgqp26OwHd6D4-YW50`), leído en cada ejecución del
+workflow. Sustituye a los dos formularios de KoboToolbox, que se migraron a ese
+sistema: ya no hace falta el secret `KOBO_TOKEN`.
 
-Necesita el secret **`KOBO_TOKEN`** (Settings → Secrets and variables →
-Actions) con un token de la API de Kobo. Sin él, o si Kobo no responde, el
+El libro es público con el enlace, así que la lectura no lleva credenciales. Si
+alguna vez deja de serlo, la construcción falla con un 403 explícito y el
 dashboard **se publica igual**: la pestaña muestra el motivo y la hora del
-intento, y el run queda marcado con un aviso en Actions. Nunca se publica un
-dashboard incompleto sin que se sepa por qué.
+intento, y el run queda marcado con un aviso en Actions.
 
-El apartado mide **producción, no cumplimiento**: cuántos registros declaran
-cada actividad, por quién, en qué servicio y en qué mes. Destaca las tres
-actividades principales —casos nuevos investigados, casos en seguimiento y
-cierre de casos— con un KPI cada una; las otras tres se monitorean en su
-propia tarjeta, al final.
+De las once hojas del libro se leen cinco: `CASOS_IAAS` (el caso), `PACIENTES`
+(solo sexo y fecha de nacimiento, para el tramo de edad), `DISPOSITIVOS` (días
+de exposición y bundles), `INVESTIGACIONES` (fechas y enfermedades crónicas) y
+`KOBO_SEGUIMIENTO` (ver más abajo).
 
-Las respuestas SI/NO de cada actividad se leen en Kobo pero **no se
-publican**. Consecuencia a tener presente: un `NO` nuevo en el formulario no
-aparecerá en ninguna parte del dashboard.
+Las hojas se bajan por `export?format=csv&gid=`, no por la API `gviz/tq`: gviz
+devuelve el libro a medias —81 de 186 casos, sin avisar— y un apartado
+publicado con un tercio de los datos es peor que uno que falla. Los `gid` no
+están escritos a mano: se leen del índice del libro por nombre de hoja, para
+que recrear una hoja no rompa la descarga en silencio.
 
-Del formulario solo se publican fecha, responsable, servicio y actividades
-declaradas. El nombre del paciente, el expediente, las conclusiones y el
-responsable de reporte no salen del proceso de construcción: `kobo.py` los
-descarta al cargar, con una lista blanca —lo que no está declarado no se
-publica, así que una pregunta nueva en Kobo no se filtra por descuido— y una
-prueba comprueba que no aparecen en el HTML generado.
+### Qué mide
 
-Los pacientes distintos se muestran como un total del periodo, no como un KPI
-que responda a los filtros: para filtrarlo habría que publicar un
-identificador por fila, y fecha + servicio + responsable basta para
-reidentificar a alguien.
+El apartado mide **vigilancia epidemiológica**, no producción de PCI:
 
-### Casos confirmados, por área
+- **Proceso** — embudo de notificado a investigación cerrada, evolución
+  mensual de confirmados frente a descartados, y oportunidad en días (ingreso →
+  notificación, notificación → investigación, notificación → VIGEPES-08), con
+  mediana y P90 en vez de media: la cola es larga y un solo caso demorado
+  movería el promedio.
+- **Dónde y qué** — servicio, ubicación, diagnóstico de IAAS y origen
+  intrahospitalario o importado. El establecimiento de procedencia
+  (`LUGAR_ORIGEN_EXTRA`) **no se publica**: es texto libre, y en una página
+  pública eso es una fuga esperando a que alguien escriba ahí un nombre. Para
+  recuperarlo, el sistema tendría que convertir el campo en lista de opciones.
+- **Microbiología** — microorganismos aislados y su cruce con el servicio, que
+  es donde se ve un conglomerado antes de que alguien lo llame brote.
+- **Dispositivos** — casos, días de exposición registrados, densidad por 1.000
+  días y cumplimiento de bundle. La densidad usa los días que registraron las
+  investigaciones, **no** el censo de días-dispositivo del hospital: sirve para
+  comparar dispositivos entre sí y en el tiempo, no como tasa oficial. La
+  tarjeta lo dice.
+- **ISQ** — clasificación de herida, tipo de intervención y procedimiento.
+- **Desenlace y causas** — letalidad cruda por diagnóstico, Pareto de causa
+  raíz y enfermedades crónicas de base.
+- **Calidad del registro** — la última tarjeta cuenta los huecos: cada uno es
+  un caso que no entra en alguna de las tarjetas de arriba.
 
-La misma pestaña abre con los **casos de IAAS confirmados**, que salen de otro
-formulario: `ab9ihfUpzVx7UXnTJUvygP` ("Seguimiento Pacientes con IAAS"). Cuenta
-los envíos cuya *Definición de caso* es `Confirmado` y los reparte por la
-**ubicación del paciente**, en sus dos niveles: unidad/servicio (`Ubi1`) y
-subservicio (`Ubi2`–`Ubi8`, la que esté contestada).
+### Fechas perdidas en la migración
 
-El área es dónde está el paciente, no dónde se adquirió la infección. El
-formulario también registra el lugar de origen, pero solo para las
-intrahospitalarias: en el resto viene vacío, y un desglose con un tercio de
-huecos se lee mal.
+La migración desde Kobo dejó `FECHA_NOTIFICACION` y `FECHA_INGRESO` vacías en
+101 de los 181 casos migrados; el export crudo del formulario, que vive en la
+hoja `KOBO_SEGUIMIENTO` del mismo libro, sí las tiene todas. `iaas.py` las
+rescata emparejando por `KOBO_UUID` y publica el recuento en la tarjeta de
+calidad del registro.
 
-Ese formulario repite etiquetas —"Unidad/servicio" aparece en la ubicación del
-paciente y otra vez en el lugar de origen—, así que sus campos se mapean por
-**nombre de pregunta**, no por etiqueta como los de producción. Un mapa por
-etiqueta se quedaría con una de las dos en silencio.
+Es un parche a la vista, no una solución: **lo correcto es rehacer ese tramo de
+la migración en el sistema**. Sin el rescate, un tercio de los casos
+confirmados se quedaría fuera de toda serie temporal.
 
-De él solo se publican fecha de notificación, unidad y subservicio: tres
-columnas. Nombre, expediente, diagnóstico y observaciones no salen del proceso
-de construcción, y una prueba lo comprueba.
+### Privacidad
 
-Se descarga y falla por su cuenta: si su esquema cambia, el resto de la pestaña
-se sigue publicando, y al revés. Solo el rango de fechas filtra estas tarjetas
-—responsable, servicio y actividad son dimensiones del formulario de
-producción, que no existen en este—, y la propia tarjeta lo dice.
+Del libro solo se publican las columnas de la lista blanca de `iaas.py`. Nombre
+del paciente, expediente, cama, diagnóstico CIE-10, observaciones, responsable
+de la cirugía y personal de PCI no salen del proceso de construcción: lo que no
+está declarado no se copia, así que una columna nueva en el sistema no se
+filtra por descuido. Dos pruebas lo comprueban, una sobre el bloque de datos y
+otra sobre el HTML ya renderizado.
+
+La fecha de nacimiento no se publica: solo el tramo de edad. Los pacientes
+distintos se muestran como un total del periodo y no como un KPI que responda a
+los filtros: para filtrarlo habría que publicar un identificador por caso, y
+fecha + servicio + edad basta para reidentificar a alguien.
+
+Se descargan y fallan juntas: si el libro cambia de forma, la pestaña muestra el
+motivo y el resto del dashboard se publica igual.
 
 ## Generar el dashboard en tu equipo
 

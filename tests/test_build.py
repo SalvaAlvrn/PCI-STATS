@@ -7,7 +7,7 @@ import pytest
 import requests
 
 import build_dashboard
-import kobo
+import iaas
 from build_dashboard import (
     AREA_NULA,
     BuildError,
@@ -501,7 +501,7 @@ def test_encode_sin_iaas_deja_el_bloque_con_el_motivo(registros_ok,
     assert data["iaas"]["error"] == "HTTP 401"
 
 
-def test_main_publica_igual_cuando_kobo_falla(libro_real, capsys):
+def test_main_publica_igual_cuando_la_vigilancia_falla(libro_real, capsys):
     """main() no escribe en disco aquí: render_html se sustituye por un espía.
 
     Llamar a main() de verdad sobreescribiría el dashboard.html del
@@ -513,35 +513,34 @@ def test_main_publica_igual_cuando_kobo_falla(libro_real, capsys):
         capturado["data"] = data
         return 0
 
-    with patch("build_dashboard.kobo.construir",
-               side_effect=kobo.KoboError("HTTP 401")), \
-         patch("build_dashboard.render_html", side_effect=espia):
+    with patch("build_dashboard.vigilancia.construir",
+               side_effect=iaas.IaasError("HTTP 403")),          patch("build_dashboard.render_html", side_effect=espia):
         codigo = build_dashboard.main([str(libro_real)])
 
     assert codigo == 0
     assert capturado["data"]["iaas"]["ok"] is False
-    assert capturado["data"]["iaas"]["error"] == "HTTP 401"
+    assert capturado["data"]["iaas"]["error"] == "HTTP 403"
     salida = capsys.readouterr()
-    assert "HTTP 401" in salida.out + salida.err
+    assert "HTTP 403" in salida.out + salida.err
 
 
 def test_el_html_generado_no_contiene_datos_de_paciente(tmp_path):
-    """La prueba que sostiene la promesa de privacidad del apartado.
+    """La promesa de privacidad, comprobada sobre el HTML ya renderizado.
 
-    Se construye con un envío sintético cuyos campos personales son cadenas
-    inconfundibles y se comprueba que ninguna sobrevive al HTML.
+    `test_iaas.py` comprueba el bloque de datos; esto comprueba el archivo que
+    se publica, que es donde el descuido acabaría viéndose.
     """
-    from test_kobo import envio, esquema_completo
+    from test_iaas import PACIENTE, libro_falso
 
-    with patch("kobo.descargar", return_value=(esquema_completo(), [envio()])):
-        iaas = kobo.construir("t0ken")
+    with patch("iaas.descargar", return_value=libro_falso()):
+        bloque = iaas.construir()
     plantilla = tmp_path / "t.html"
     plantilla.write_text("<html>/*__DATA__*/ /*__CHARTJS__*/</html>", "utf-8")
     vendor = tmp_path / "chart.js"
     vendor.write_text("// chart", "utf-8")
     salida = tmp_path / "d.html"
-    render_html({"iaas": iaas}, plantilla, vendor, salida)
+    render_html({"iaas": bloque}, plantilla, vendor, salida)
     html = salida.read_text("utf-8")
-    assert "PACIENTE_SINTETICO_XYZ" not in html
+    assert PACIENTE not in html
     assert "EXP-999999" not in html
-    assert "CONCLUSION_SINTETICA_XYZ" not in html
+    assert "OBSERVACION_SINTETICA_XYZ" not in html

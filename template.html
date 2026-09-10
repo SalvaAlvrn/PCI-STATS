@@ -138,7 +138,7 @@ tfoot td { font-weight: 600; border-top: 2px solid var(--border); border-bottom:
     <button role="tab" data-view="global" aria-selected="true">Global</button>
     <button role="tab" data-view="responsable" aria-selected="false">Por responsable</button>
     <button role="tab" data-view="formulario" aria-selected="false">Por formulario</button>
-    <button role="tab" data-view="iaas" aria-selected="false">Investigación de IAAS</button>
+    <button role="tab" data-view="iaas" aria-selected="false">Vigilancia de IAAS</button>
   </div>
 
   <div class="filters" id="filters"></div>
@@ -195,8 +195,9 @@ const store = (() => {
  * mezclarlas dejaría selectores muertos en las dos vistas.
  */
 const storeIaas = (() => {
-  const filters = {desde: null, hasta: null, responsable: null,
-                   servicio: null, actividad: null};
+  const filters = {desde: null, hasta: null, definicion: null, servicio: null,
+                   ubicacion: null, diagnostico: null, origen: null,
+                   microorganismo: null, dispositivo: null};
   const oyentes = [];
   function set(clave, valor) { filters[clave] = valor; emit(); }
   function clear(clave) { filters[clave] = null; emit(); }
@@ -355,83 +356,210 @@ const agg = crearAgg(DATA);
 <script id="mod-iaas">
 /** Agregación del apartado de IAAS.
  *
- * Mide producción: cuántos envíos declararon cada actividad, por quién,
- * dónde y cuándo. Las respuestas SI/NO del formulario no se publican, así
- * que aquí no hay tasas — solo recuentos.
+ * Una fila por caso vigilado. Todo se recalcula sobre el subconjunto que
+ * dejan los filtros: si las tarjetas clínicas trajesen totales precalculados,
+ * dirían una cosa distinta de la que el filtro promete.
  */
 function crearIaas(iaas) {
   const r = iaas.rows;
-  const n = iaas.meta.filas;
-  const nAct = iaas.actividades.length;
+  const n = r.dia.length;
+  const E = iaas.etiquetas;
+  const iConfirmado = iaas.dims.definicion.indexOf(E.confirmado);
+
+  // Dimensiones de un valor por caso; el filtro compara el índice.
+  const SIMPLES = ['definicion', 'servicio', 'ubicacion', 'diagnostico',
+                   'origen', 'condicion', 'sexo'];
+  // Dimensiones de varios valores por caso; viajan como matriz etiqueta×caso.
+  const MATRICES = ['microorganismo', 'dispositivo', 'causa'];
 
   function filasActivas(f) {
     const out = [];
     for (let i = 0; i < n; i++) {
+      // Un caso sin fecha de notificación no se puede situar en el tiempo:
+      // desaparece en cuanto hay filtro de fechas, y solo entonces.
+      if ((f.desde !== null || f.hasta !== null) && r.dia[i] === null) continue;
       if (f.desde !== null && r.dia[i] < f.desde) continue;
       if (f.hasta !== null && r.dia[i] > f.hasta) continue;
-      if (f.responsable !== null && r.responsable[i] !== f.responsable) continue;
-      if (f.servicio !== null && r.servicio[i] !== f.servicio) continue;
-      if (f.actividad !== null && r.actividades[f.actividad][i] !== 1) continue;
+      let fuera = false;
+      for (const clave of SIMPLES) {
+        if (f[clave] != null && r[clave][i] !== f[clave]) { fuera = true; break; }
+      }
+      if (fuera) continue;
+      for (const clave of MATRICES) {
+        if (f[clave] != null && r[clave][f[clave]][i] !== 1) { fuera = true; break; }
+      }
+      if (fuera) continue;
       out.push(i);
     }
     return out;
   }
 
-  /** Recuento de envíos que declararon cada actividad. */
-  function cuenta(filas) {
-    const out = new Array(nAct).fill(0);
-    for (const i of filas) {
-      for (let a = 0; a < nAct; a++) if (r.actividades[a][i] === 1) out[a]++;
-    }
-    return out;
-  }
+  const esConfirmado = i => r.definicion[i] === iConfirmado;
+  const confirmados = filas => filas.filter(esConfirmado);
+  const indiceDe = (clave, etiqueta) => iaas.dims[clave].indexOf(etiqueta);
+
+  // Más casos arriba; a igualdad, alfabético para que no baile entre builds.
+  const ordenar = filas => filas.sort(
+    (a, b) => b.casos - a.casos || a.label.localeCompare(b.label, 'es'));
 
   function kpis(filas) {
-    return {registros: filas.length, porActividad: cuenta(filas)};
+    const conf = confirmados(filas);
+    const iFallecido = indiceDe('condicion', 'Fallecido');
+    const iPendiente = indiceDe('vigepes', 'Pendiente');
+    let fallecidos = 0, pendientes = 0, investigados = 0, cerrados = 0;
+    for (const i of conf) {
+      if (r.condicion[i] === iFallecido) fallecidos++;
+      if (r.vigepes[i] === iPendiente) pendientes++;
+    }
+    for (const i of filas) {
+      if (r.investigado[i] === 1) investigados++;
+      if (r.cerrado[i] === 1) cerrados++;
+    }
+    return {
+      casos: filas.length, confirmados: conf.length, fallecidos, pendientes,
+      investigados, cerrados,
+      // Letalidad sobre confirmados: sobre notificados mezclaría con los que
+      // resultaron no ser IAAS y saldría siempre más baja de lo que es.
+      letalidad: conf.length ? fallecidos / conf.length : null,
+      confirmacion: filas.length ? conf.length / filas.length : null
+    };
   }
 
-  function porActividad(filas) {
-    const c = cuenta(filas);
-    return iaas.actividades.map((label, a) => ({
-      idx: a, label, registros: c[a], principal: a < iaas.principales
-    }));
+  /** Embudo de vigilancia: de caso notificado a investigación cerrada. */
+  function embudo(filas) {
+    const cuenta = etiqueta => {
+      const k = indiceDe('definicion', etiqueta);
+      return filas.filter(i => r.definicion[i] === k).length;
+    };
+    return [
+      {label: 'Notificados', casos: filas.length},
+      {label: 'Con investigación', casos: filas.filter(i => r.investigado[i] === 1).length},
+      {label: 'Confirmados', casos: cuenta(E.confirmado)},
+      {label: 'Sospechosos', casos: cuenta(E.sospechoso)},
+      {label: 'Descartados (no IAAS)', casos: cuenta(E.no_iaas)},
+      {label: 'Investigación cerrada', casos: filas.filter(i => r.cerrado[i] === 1).length}
+    ];
   }
 
   function porDim(filas, clave) {
     const etiquetas = iaas.dims[clave];
     const acc = new Map();
-    for (const i of filas) {
-      const idx = r[clave][i];
-      let e = acc.get(idx);
-      if (!e) {
-        e = {idx, label: etiquetas[idx], registros: 0,
-             actividades: new Array(nAct).fill(0)};
-        acc.set(idx, e);
-      }
-      e.registros++;
-      for (let a = 0; a < nAct; a++) if (r.actividades[a][i] === 1) e.actividades[a]++;
-    }
-    const salida = [...acc.values()];
-    // Quien más produce, arriba. A igualdad de volumen, orden alfabético
-    // para que el listado no baile entre builds.
-    salida.sort((a, b) => b.registros - a.registros ||
-                          a.label.localeCompare(b.label, 'es'));
-    return salida;
+    for (const i of filas) acc.set(r[clave][i], (acc.get(r[clave][i]) || 0) + 1);
+    return ordenar([...acc].map(([k, casos]) => ({label: etiquetas[k], casos})));
   }
 
-  function series(filas, periodo) {
+  function porMulti(filas, clave) {
+    const etiquetas = iaas.dims[clave];
+    const matriz = r[clave];
+    const salida = [];
+    for (let k = 0; k < etiquetas.length; k++) {
+      let casos = 0;
+      for (const i of filas) if (matriz[k][i] === 1) casos++;
+      // Una etiqueta con cero casos alarga el ranking sin decir nada.
+      if (casos) salida.push({label: etiquetas[k], casos});
+    }
+    return ordenar(salida);
+  }
+
+  /** Recuento de una dimensión cruzado con otra: fallecidos por diagnóstico. */
+  function porDimCon(filas, clave, claveMarca, etiquetaMarca) {
+    const etiquetas = iaas.dims[clave];
+    const marca = indiceDe(claveMarca, etiquetaMarca);
+    const acc = new Map();
+    for (const i of filas) {
+      const k = r[clave][i];
+      const e = acc.get(k) || {label: etiquetas[k], casos: 0, marcados: 0};
+      e.casos++;
+      if (r[claveMarca][i] === marca) e.marcados++;
+      acc.set(k, e);
+    }
+    return ordenar([...acc.values()]);
+  }
+
+  /** Serie temporal: confirmados frente al resto de notificaciones. */
+  function serie(filas, periodo) {
     const etiquetas = iaas.dims[periodo];
-    const vol = etiquetas.map(() => 0);
-    const porAct = iaas.actividades.map(() => etiquetas.map(() => 0));
+    const conf = etiquetas.map(() => 0);
+    const otros = etiquetas.map(() => 0);
     for (const i of filas) {
       const k = r[periodo][i];
-      vol[k]++;
-      for (let a = 0; a < nAct; a++) if (r.actividades[a][i] === 1) porAct[a][k]++;
+      if (esConfirmado(i)) conf[k]++; else otros[k]++;
     }
-    return {labels: etiquetas, volumen: vol, porActividad: porAct};
+    // «(Sin registrar)» no es un periodo: en el eje del tiempo no tiene sitio.
+    const orden = etiquetas.map((_, k) => k).filter(k => etiquetas[k] !== E.sin_dato);
+    return {labels: orden.map(k => etiquetas[k]),
+            confirmados: orden.map(k => conf[k]),
+            otros: orden.map(k => otros[k])};
   }
 
-  return {filasActivas, kpis, porActividad, porDim, series};
+  /** Densidad de incidencia por dispositivo, sobre los días registrados.
+   *
+   * El denominador son los días de exposición que las investigaciones
+   * registraron, no el censo de días-dispositivo del hospital: sirve para
+   * comparar dispositivos entre sí y consigo mismos en el tiempo, no para
+   * publicarse como la tasa oficial. La tarjeta lo dice.
+   */
+  function dispositivos(filas) {
+    const etiquetas = iaas.dims.dispositivo;
+    const salida = [];
+    for (let t = 0; t < etiquetas.length; t++) {
+      let casos = 0, dias = 0, si = 0, no = 0;
+      for (const i of filas) {
+        if (r.dispositivo[t][i] === 1) casos++;
+        dias += r.dispositivo_dias[t][i];
+        si += r.bundle_si[t][i];
+        no += r.bundle_no[t][i];
+      }
+      if (!casos && !dias) continue;
+      salida.push({
+        label: etiquetas[t], casos, dias, evaluados: si + no,
+        densidad: dias ? casos * 1000 / dias : null,
+        bundle: (si + no) ? si / (si + no) : null
+      });
+    }
+    return salida.sort((a, b) => b.casos - a.casos ||
+                                 a.label.localeCompare(b.label, 'es'));
+  }
+
+  /** Resumen de un intervalo en días. Mediana y no media: la cola es larga. */
+  function intervalo(filas, clave) {
+    const valores = [];
+    for (const i of filas) if (r[clave][i] !== null) valores.push(r[clave][i]);
+    if (!valores.length) return {n: 0, mediana: null, p90: null, max: null};
+    valores.sort((a, b) => a - b);
+    const cuantil = q => valores[Math.min(valores.length - 1,
+                                          Math.floor(q * valores.length))];
+    return {n: valores.length, mediana: cuantil(0.5), p90: cuantil(0.9),
+            max: valores[valores.length - 1]};
+  }
+
+  /** Cruce dimensión × dimensión. `multiFila` para las dimensiones matriz. */
+  function cruce(filas, claveFila, claveCol, multiFila) {
+    const etiquetasFila = iaas.dims[claveFila];
+    const etiquetasCol = iaas.dims[claveCol];
+    const celdas = etiquetasFila.map(() => etiquetasCol.map(() => 0));
+    for (const i of filas) {
+      const c = r[claveCol][i];
+      if (multiFila) {
+        for (let k = 0; k < etiquetasFila.length; k++) {
+          if (r[claveFila][k][i] === 1) celdas[k][c]++;
+        }
+      } else {
+        celdas[r[claveFila][i]][c]++;
+      }
+    }
+    // Fila entera a cero: ocupa alto y no dice nada.
+    const vivas = celdas
+      .map((fila, k) => ({k, total: fila.reduce((a, b) => a + b, 0)}))
+      .filter(e => e.total > 0)
+      .sort((a, b) => b.total - a.total);
+    return {filas: vivas.map(e => ({label: etiquetasFila[e.k],
+                                   valores: celdas[e.k], total: e.total})),
+            columnas: etiquetasCol};
+  }
+
+  return {filasActivas, confirmados, kpis, embudo, porDim, porMulti, porDimCon,
+          serie, dispositivos, intervalo, cruce};
 }
 </script>
 <script id="mod-charts">
@@ -799,7 +927,7 @@ const charts = (() => {
 const views = (() => {
   const estado = {vista: 'global', responsable: null, formulario: null};
   const contenedor = document.getElementById('view');
-  // Null cuando Kobo falló: renderIaas pinta el aviso en su lugar.
+  // Null cuando la fuente falló: renderIaas pinta el aviso en su lugar.
   const iaas = DATA.iaas.ok ? crearIaas(DATA.iaas) : null;
 
   /** Card con título y, opcionalmente, un botón que alterna gráfico/tabla. */
@@ -1196,267 +1324,293 @@ const views = (() => {
     contenedor.appendChild(tForm);
   }
 
-  /** «CASOS NUEVOS INVESTIGADOS» -> «Casos nuevos investigados».
-   *
-   * Kobo guarda las actividades en mayúsculas; en un KPI o una cabecera de
-   * tabla eso grita y además ocupa más de lo que cabe.
-   */
-  const TITULO_ACTIVIDAD = etiqueta =>
-    etiqueta.charAt(0) + etiqueta.slice(1).toLowerCase();
-
-  /** Recuento de casos confirmados por dimensión, solo con el filtro de fechas.
-   *
-   * Los otros filtros de la pestaña —responsable, servicio, actividad— son del
-   * formulario de producción y no existen en el de casos. Aplicarlos aquí daría
-   * un número que no significa nada, así que las tarjetas de casos lo dicen en
-   * vez de fingir que están filtradas.
-   */
-  function casosPorDim(casos, clave, f) {
-    const r = casos.rows;
-    const cuenta = new Map();
-    let total = 0;
-    for (let i = 0; i < r.dia.length; i++) {
-      if (f.desde !== null && r.dia[i] < f.desde) continue;
-      if (f.hasta !== null && r.dia[i] > f.hasta) continue;
-      total++;
-      const k = r[clave][i];
-      cuenta.set(k, (cuenta.get(k) || 0) + 1);
-    }
-    const filas = [...cuenta].map(([k, n]) => ({label: casos.dims[clave][k], casos: n}));
-    // Más casos arriba; a igualdad, alfabético para que no baile entre builds.
-    filas.sort((a, b) => b.casos - a.casos || a.label.localeCompare(b.label, 'es'));
-    return {filas, total};
+  /** Barras horizontales dentro de una zona, altas según cuántas filas hay. */
+  function barrasEn(zona, datos, valores, formato) {
+    const caja = document.createElement('div');
+    caja.className = 'plot';
+    caja.style.height = Math.max(140, datos.length * 26 + 40) + 'px';
+    const lienzo = document.createElement('canvas');
+    caja.appendChild(lienzo);
+    zona.appendChild(caja);
+    charts.bars(lienzo, {labels: datos.map(e => e.label),
+                        values: valores || datos.map(e => e.casos),
+                        formato: formato || charts.num});
   }
 
-  /** Tarjeta de casos confirmados por área, con gráfico y tabla. */
-  function tarjetaCasos(titulo, subtitulo, datos) {
+  /** Tarjeta de ranking: gráfico de barras y su tabla equivalente. */
+  function tarjetaRanking(titulo, subtitulo, datos, tituloDim) {
     const tarjeta = card(titulo, subtitulo);
+    if (!datos.length) {
+      tarjeta.appendChild(vacio('Sin datos para estos filtros.'));
+      return tarjeta;
+    }
     conTabla(tarjeta,
-      [{titulo: 'Área'}, {titulo: 'Casos', num: true, formato: charts.num}],
+      [{titulo: tituloDim}, {titulo: 'Casos', num: true, formato: charts.num}],
       datos.map(e => [e.label, e.casos]),
-      zona => {
-        const caja = document.createElement('div');
-        caja.className = 'plot';
-        caja.style.height = Math.max(140, datos.length * 26 + 40) + 'px';
-        const lienzo = document.createElement('canvas');
-        caja.appendChild(lienzo);
-        zona.appendChild(caja);
-        charts.bars(lienzo, {
-          labels: datos.map(e => e.label),
-          values: datos.map(e => e.casos),
-          formato: charts.num
-        });
-      });
+      zona => barrasEn(zona, datos));
     return tarjeta;
   }
 
-  /** Casos de IAAS confirmados, por unidad y por subservicio.
-   *
-   * Fuente distinta a la de producción —otro formulario de Kobo—, así que se
-   * pinta antes y aparte: si el de producción falla, esto se sigue viendo.
-   */
-  function renderCasos() {
-    const casos = DATA.iaas.casos;
-    if (!casos) return;
-    if (!casos.ok) {
-      contenedor.appendChild(vacio(
-        'Casos confirmados no disponibles: ' + casos.error +
-        (casos.fecha ? ' (último intento: ' + casos.fecha + ')' : '')));
-      return;
+  /** Tarjeta de solo tabla, para lo que no gana nada dibujado. */
+  function tarjetaTabla(titulo, subtitulo, columnas, filas, total) {
+    const tarjeta = card(titulo, subtitulo);
+    if (!filas.length) {
+      tarjeta.appendChild(vacio('Sin datos para estos filtros.'));
+      return tarjeta;
     }
-    const f = storeIaas.filters;
-    const unidades = casosPorDim(casos, 'unidad', f);
-    const sub = casosPorDim(casos, 'subservicio', f);
-
-    const fila = document.createElement('div');
-    fila.className = 'kpis';
-    fila.style.marginBottom = '16px';
-    fila.appendChild(kpi('IAAS confirmadas', charts.num(unidades.total)));
-    fila.appendChild(kpi('Unidades con casos', charts.num(unidades.filas.length)));
-    contenedor.appendChild(fila);
-
-    const nota = document.createElement('div');
-    nota.className = 'sub';
-    nota.style.marginBottom = '16px';
-    nota.textContent = 'Casos con «Definición de caso: Confirmado», por la ' +
-      'ubicación del paciente. Solo el rango de fechas filtra estas tarjetas: ' +
-      'responsable, servicio y actividad son del formulario de producción.';
-    contenedor.appendChild(nota);
-
-    if (!unidades.total) {
-      contenedor.appendChild(vacio('Sin casos confirmados en este rango de fechas.'));
-      return;
-    }
-    contenedor.appendChild(tarjetaCasos(
-      'IAAS confirmadas por unidad', 'Unidad o servicio donde está el paciente.',
-      unidades.filas));
-    contenedor.appendChild(tarjetaCasos(
-      'IAAS confirmadas por subservicio', 'El segundo nivel del área.',
-      sub.filas));
+    charts.tabla(zonaDe(tarjeta), columnas, filas, total ? {total} : undefined);
+    return tarjeta;
   }
 
+  const dias = v => v === null ? '—' : charts.num(v) + ' d';
+  const decimales = v => v === null ? '—' : v.toFixed(2);
+
   function renderIaas() {
-    renderCasos();
     if (!DATA.iaas.ok) {
       // La pestaña sigue existiendo y dice por qué no hay datos: si
-      // desapareciera, un fallo de Kobo pasaría por "aquí nunca hubo nada".
+      // desapareciera, un fallo de la fuente pasaría por "aquí nunca hubo nada".
       contenedor.appendChild(vacio(
-        'Datos de Kobo no disponibles: ' + DATA.iaas.error +
+        'Datos de vigilancia no disponibles: ' + DATA.iaas.error +
         (DATA.iaas.fecha ? ' (último intento: ' + DATA.iaas.fecha + ')' : '')));
       return;
     }
+    const meta = DATA.iaas.meta;
     const filas = iaas.filasActivas(storeIaas.filters);
     if (!filas.length) {
-      contenedor.appendChild(vacio('Sin registros para estos filtros.'));
+      contenedor.appendChild(vacio('Sin casos para estos filtros.'));
       return;
     }
-    const acts = DATA.iaas.actividades;
-    const nPrin = DATA.iaas.principales;
+    const conf = iaas.confirmados(filas);
     const k = iaas.kpis(filas);
 
-    // Las tres principales, cada una con su KPI. Las demás se monitorean más
-    // abajo: siguen visibles, pero no compiten por la primera pantalla.
-    const fila = document.createElement('div');
-    fila.className = 'kpis';
-    fila.style.marginBottom = '16px';
-    fila.appendChild(kpi('Registros', charts.num(k.registros)));
-    for (let a = 0; a < nPrin; a++) {
-      fila.appendChild(kpi(TITULO_ACTIVIDAD(acts[a]),
-                           charts.num(k.porActividad[a])));
-    }
-    contenedor.appendChild(fila);
+    const cabecera = document.createElement('div');
+    cabecera.className = 'kpis';
+    cabecera.style.marginBottom = '16px';
+    cabecera.appendChild(kpi('Casos notificados', charts.num(k.casos)));
+    cabecera.appendChild(kpi('IAAS confirmadas', charts.num(k.confirmados),
+                             charts.pct(k.confirmacion) + ' de lo notificado'));
+    cabecera.appendChild(kpi('Letalidad', charts.pct(k.letalidad),
+                             charts.num(k.fallecidos) + ' fallecidos'));
+    cabecera.appendChild(kpi('VIGEPES-08 pendiente', charts.num(k.pendientes)));
+    cabecera.appendChild(kpi('Con investigación', charts.num(k.investigados),
+                             charts.num(k.cerrados) + ' cerradas'));
+    contenedor.appendChild(cabecera);
 
-    // Los pacientes distintos no son filtrables: contarlos por filtro
-    // exigiría publicar un identificador por fila, y fecha + servicio +
-    // responsable basta para reidentificar a alguien. Solo el total.
+    // Los pacientes distintos no son filtrables: contarlos por filtro exigiría
+    // publicar un identificador por caso, y fecha + servicio + edad basta para
+    // reidentificar a alguien. Solo el total del periodo completo.
     const nota = document.createElement('div');
     nota.className = 'sub';
     nota.style.marginBottom = '16px';
     nota.textContent = 'Sobre el periodo completo: ' +
-      charts.num(DATA.iaas.meta.pacientes) + ' pacientes distintos.';
+      charts.num(meta.pacientes) + ' pacientes distintos en ' +
+      charts.num(meta.casos) + ' casos. La letalidad y el VIGEPES-08 se ' +
+      'calculan solo sobre los casos confirmados.';
     contenedor.appendChild(nota);
 
-    const porAct = iaas.porActividad(filas);
-    const tAct = card('Producción por actividad',
-                      'Cuántos registros declararon cada actividad.');
-    conTabla(tAct,
-      [{titulo: 'Actividad'}, {titulo: 'Registros', num: true, formato: charts.num}],
-      porAct.map(e => [e.label, e.registros]),
-      zona => {
-        const caja = document.createElement('div');
-        caja.className = 'plot';
-        caja.style.height = Math.max(140, porAct.length * 26 + 40) + 'px';
-        const lienzo = document.createElement('canvas');
-        caja.appendChild(lienzo);
-        zona.appendChild(caja);
-        charts.bars(lienzo, {
-          labels: porAct.map(e => e.label),
-          values: porAct.map(e => e.registros),
-          formato: charts.num
-        });
-      });
-    contenedor.appendChild(tAct);
+    // --- Proceso de vigilancia -------------------------------------------
+    const emb = iaas.embudo(filas);
+    contenedor.appendChild(tarjetaRanking(
+      'Embudo de vigilancia',
+      'De la notificación al cierre de la investigación. Las categorías no ' +
+      'suman: un caso está en varias.',
+      emb, 'Etapa'));
 
-    // Cuántos casos nuevos aporta cada servicio. La tabla «Por servicio» ya
-    // trae la columna, pero mezclada con el resto de actividades; aquí va
-    // sola y ordenada por ella, que es la pregunta que se hace de verdad:
-    // de dónde salen los casos.
-    const NUEVOS = 0;  // «CASOS NUEVOS INVESTIGADOS», la primera principal.
-    const nuevosPorServicio = iaas.porDim(filas, 'servicio')
-      .map(e => ({label: e.label, casos: e.actividades[NUEVOS]}))
-      // Un servicio con cero casos nuevos no dice nada aquí y alarga la
-      // barra vertical: se queda en la tabla «Por servicio», que sí los lista.
-      .filter(e => e.casos > 0)
-      .sort((a, b) => b.casos - a.casos || a.label.localeCompare(b.label, 'es'));
-    if (nuevosPorServicio.length) {
-      const tNuevos = card(TITULO_ACTIVIDAD(acts[NUEVOS]) + ' por servicio',
-                           'Servicios sin casos nuevos en el periodo no aparecen.');
-      conTabla(tNuevos,
-        [{titulo: 'Servicio'}, {titulo: 'Casos', num: true, formato: charts.num}],
-        nuevosPorServicio.map(e => [e.label, e.casos]),
-        zona => {
-          const caja = document.createElement('div');
-          caja.className = 'plot';
-          caja.style.height = Math.max(140, nuevosPorServicio.length * 26 + 40) + 'px';
-          const lienzo = document.createElement('canvas');
-          caja.appendChild(lienzo);
-          zona.appendChild(caja);
-          charts.bars(lienzo, {
-            labels: nuevosPorServicio.map(e => e.label),
-            values: nuevosPorServicio.map(e => e.casos),
-            formato: charts.num
-          });
-        });
-      contenedor.appendChild(tNuevos);
-    }
-
-    // Evolución mensual: una línea por actividad principal. Es la tarjeta
-    // que responde "¿esto sube o baja?".
-    const s = iaas.series(filas, 'mes');
+    const s = iaas.serie(filas, 'mes');
     const tEvo = card('Evolución mensual',
-                      'Las tres actividades principales, mes a mes.');
-    const columnas = [{titulo: 'Mes'}];
-    for (let a = 0; a < nPrin; a++) {
-      columnas.push({titulo: TITULO_ACTIVIDAD(acts[a]), num: true,
-                     formato: charts.num});
-    }
-    conTabla(tEvo, columnas,
-      s.labels.map((l, i) => {
-        const f = [l];
-        for (let a = 0; a < nPrin; a++) f.push(s.porActividad[a][i]);
-        return f;
-      }),
+                      'Casos confirmados frente al resto de notificaciones.');
+    conTabla(tEvo,
+      [{titulo: 'Mes'},
+       {titulo: 'Confirmados', num: true, formato: charts.num},
+       {titulo: 'Otros', num: true, formato: charts.num}],
+      s.labels.map((l, i) => [l, s.confirmados[i], s.otros[i]]),
       zona => charts.line(plot(zona, 'i-evo'), {
         labels: s.labels,
         formato: charts.num,
-        series: acts.slice(0, nPrin).map((label, a) => ({
-          label,
-          data: s.porActividad[a],
-          color: charts.token('series-' + (a + 1))
-        }))
+        series: [
+          {label: 'Confirmados', data: s.confirmados,
+           color: charts.token('series-1')},
+          {label: 'Sospechosos y descartados', data: s.otros,
+           color: charts.token('series-2')}
+        ]
       }));
     contenedor.appendChild(tEvo);
 
-    for (const [clave, titulo] of [['responsable', 'Por responsable'],
-                                   ['servicio', 'Por servicio']]) {
-      const datos = iaas.porDim(filas, clave);
-      const tarjeta = card(titulo, null);
-      const cols = [{titulo: clave === 'responsable' ? 'Responsable' : 'Servicio'},
-                    {titulo: 'Registros', num: true, formato: charts.num}];
-      for (let a = 0; a < nPrin; a++) {
-        cols.push({titulo: TITULO_ACTIVIDAD(acts[a]), num: true,
-                   formato: charts.num});
-      }
-      const total = ['Total (' + datos.length + ')',
-                     datos.reduce((x, e) => x + e.registros, 0)];
-      for (let a = 0; a < nPrin; a++) {
-        total.push(datos.reduce((x, e) => x + e.actividades[a], 0));
-      }
-      charts.tabla(zonaDe(tarjeta), cols,
-        datos.map(e => [e.label, e.registros,
-                        ...e.actividades.slice(0, nPrin)]),
-        {total});
-      contenedor.appendChild(tarjeta);
+    const oportunidad = [
+      ['Ingreso → notificación', iaas.intervalo(filas, 'deteccion')],
+      ['Notificación → investigación', iaas.intervalo(filas, 'a_investigacion')],
+      ['Notificación → VIGEPES-08', iaas.intervalo(filas, 'a_vigepes')]
+    ];
+    contenedor.appendChild(tarjetaTabla(
+      'Oportunidad del proceso',
+      'Días entre hitos. Mediana y no media: la cola es larga y una sola ' +
+      'demora movería el promedio. «Casos» son aquellos con las dos fechas.',
+      [{titulo: 'Intervalo'},
+       {titulo: 'Casos', num: true, formato: charts.num},
+       {titulo: 'Mediana', num: true, formato: dias},
+       {titulo: 'P90', num: true, formato: dias},
+       {titulo: 'Máximo', num: true, formato: dias}],
+      oportunidad.map(([label, v]) => [label, v.n, v.mediana, v.p90, v.max])));
+
+    // --- Dónde y qué ------------------------------------------------------
+    contenedor.appendChild(tarjetaRanking(
+      'IAAS confirmadas por servicio', 'Servicio donde está el paciente.',
+      iaas.porDim(conf, 'servicio'), 'Servicio'));
+    contenedor.appendChild(tarjetaRanking(
+      'IAAS confirmadas por ubicación', 'El segundo nivel del área.',
+      iaas.porDim(conf, 'ubicacion'), 'Ubicación'));
+    contenedor.appendChild(tarjetaRanking(
+      'Diagnóstico de IAAS', 'Solo casos confirmados.',
+      iaas.porDim(conf, 'diagnostico'), 'Diagnóstico'));
+
+    const origen = iaas.porDim(conf, 'origen');
+    contenedor.appendChild(tarjetaRanking(
+      'Origen de la infección',
+      'Extrahospitalario es infección importada: cuenta para la carga ' +
+      'asistencial, no para la tasa del hospital.',
+      origen, 'Origen'));
+
+    // --- Microbiología ----------------------------------------------------
+    const micro = iaas.porMulti(conf, 'microorganismo');
+    contenedor.appendChild(tarjetaRanking(
+      'Microorganismos aislados',
+      'Un caso puede aportar más de uno, así que la suma pasa del total.',
+      micro, 'Microorganismo'));
+
+    const cruceMicro = iaas.cruce(conf, 'microorganismo', 'servicio', true);
+    if (cruceMicro.filas.length) {
+      contenedor.appendChild(tarjetaTabla(
+        'Microorganismo por servicio',
+        'Dónde aparece cada uno. Un mismo microorganismo repitiéndose en un ' +
+        'servicio en pocos días es la señal que hay que mirar de cerca.',
+        [{titulo: 'Microorganismo'},
+         ...cruceMicro.columnas.map(c => ({titulo: c, num: true,
+                                           formato: charts.num})),
+         {titulo: 'Total', num: true, formato: charts.num}],
+        cruceMicro.filas.map(f => [f.label, ...f.valores, f.total])));
     }
 
-    // Las actividades secundarias, por responsable: se monitorean, pero
-    // aparte de las tres que mandan.
-    const secundarias = acts.slice(nPrin);
-    if (secundarias.length) {
-      const datos = iaas.porDim(filas, 'responsable');
-      const tOtras = card('Otras actividades',
-                          'Se monitorean, pero no son las principales.');
-      const cols = [{titulo: 'Responsable'}];
-      secundarias.forEach(label => cols.push({titulo: TITULO_ACTIVIDAD(label),
-                                              num: true, formato: charts.num}));
-      const total = ['Total (' + datos.length + ')'];
-      secundarias.forEach((_, j) => total.push(
-        datos.reduce((x, e) => x + e.actividades[nPrin + j], 0)));
-      charts.tabla(zonaDe(tOtras), cols,
-        datos.map(e => [e.label, ...e.actividades.slice(nPrin)]),
-        {total});
-      contenedor.appendChild(tOtras);
+    // --- Dispositivos -----------------------------------------------------
+    const disp = iaas.dispositivos(conf);
+    if (disp.length) {
+      const tDisp = card(
+        'Dispositivos invasivos',
+        'Densidad de incidencia sobre los días de exposición registrados en ' +
+        'las investigaciones, no sobre el censo de días-dispositivo del ' +
+        'hospital: sirve para comparar dispositivos entre sí y en el tiempo, ' +
+        'no como tasa oficial.');
+      conTabla(tDisp,
+        [{titulo: 'Dispositivo'},
+         {titulo: 'Casos', num: true, formato: charts.num},
+         {titulo: 'Días registrados', num: true, formato: charts.num},
+         {titulo: 'Casos / 1.000 días', num: true, formato: decimales},
+         {titulo: 'Bundle cumple', num: true, formato: charts.pct},
+         {titulo: 'Evaluados', num: true, formato: charts.num}],
+        disp.map(e => [e.label, e.casos, e.dias, e.densidad, e.bundle,
+                       e.evaluados]),
+        zona => barrasEn(zona, disp, disp.map(e => e.densidad), decimales));
+      contenedor.appendChild(tDisp);
     }
+
+    // --- Infección del sitio quirúrgico -----------------------------------
+    const sinDato = DATA.iaas.etiquetas.sin_dato;
+    const herida = iaas.porDim(conf, 'herida').filter(e => e.label !== sinDato);
+    if (herida.length) {
+      contenedor.appendChild(tarjetaRanking(
+        'ISQ por clasificación de herida',
+        'Limpia, limpia-contaminada, contaminada y sucia tienen riesgo basal ' +
+        'distinto: comparar sin separarlas mezcla cosas que no se comparan.',
+        herida, 'Clasificación'));
+      const intervencion = iaas.porDim(conf, 'intervencion')
+        .filter(e => e.label !== sinDato);
+      const procedimiento = iaas.porDim(conf, 'procedimiento')
+        .filter(e => e.label !== sinDato);
+      contenedor.appendChild(tarjetaTabla(
+        'ISQ por tipo de intervención', null,
+        [{titulo: 'Tipo'}, {titulo: 'Casos', num: true, formato: charts.num}],
+        intervencion.map(e => [e.label, e.casos])));
+      contenedor.appendChild(tarjetaRanking(
+        'ISQ por procedimiento', 'Procedimiento quirúrgico asociado.',
+        procedimiento, 'Procedimiento'));
+    }
+
+    // --- Desenlace y causas -----------------------------------------------
+    const letalidad = iaas.porDimCon(conf, 'diagnostico', 'condicion', 'Fallecido')
+      .filter(e => e.casos > 0);
+    contenedor.appendChild(tarjetaTabla(
+      'Letalidad por diagnóstico',
+      'Fallecidos entre los casos confirmados. Es letalidad cruda: no ' +
+      'distingue si la IAAS causó la muerte o acompañó a otra cosa.',
+      [{titulo: 'Diagnóstico'},
+       {titulo: 'Casos', num: true, formato: charts.num},
+       {titulo: 'Fallecidos', num: true, formato: charts.num},
+       {titulo: 'Letalidad', num: true, formato: charts.pct}],
+      letalidad.map(e => [e.label, e.casos, e.marcados,
+                          e.casos ? e.marcados / e.casos : null]),
+      ['Total (' + letalidad.length + ')',
+       letalidad.reduce((x, e) => x + e.casos, 0),
+       letalidad.reduce((x, e) => x + e.marcados, 0),
+       k.letalidad]));
+
+    const causas = iaas.porMulti(conf, 'causa');
+    if (causas.length) {
+      const totalCausas = causas.reduce((x, e) => x + e.casos, 0);
+      let acumulado = 0;
+      const pareto = causas.map(e => {
+        acumulado += e.casos;
+        return [e.label, e.casos, acumulado / totalCausas];
+      });
+      const tCausas = card(
+        'Causa raíz identificada',
+        'Ordenado por frecuencia, con el acumulado: las primeras filas son ' +
+        'donde una intervención rinde más. Un caso puede tener varias causas.');
+      conTabla(tCausas,
+        [{titulo: 'Causa'},
+         {titulo: 'Casos', num: true, formato: charts.num},
+         {titulo: 'Acumulado', num: true, formato: charts.pct}],
+        pareto, zona => barrasEn(zona, causas));
+      contenedor.appendChild(tCausas);
+    }
+
+    const cronicas = iaas.porMulti(conf, 'cronica');
+    if (cronicas.length) {
+      contenedor.appendChild(tarjetaRanking(
+        'Enfermedades crónicas de base',
+        'De la investigación del caso. Un paciente puede tener varias.',
+        cronicas, 'Enfermedad'));
+    }
+
+    // --- Demografía -------------------------------------------------------
+    const demografia = iaas.cruce(conf, 'edad', 'sexo', false);
+    if (demografia.filas.length) {
+      contenedor.appendChild(tarjetaTabla(
+        'Edad y sexo',
+        'Tramos fijos del informe epidemiológico, para poder comparar entre ' +
+        'periodos. La fecha de nacimiento no se publica, solo el tramo.',
+        [{titulo: 'Edad'},
+         ...demografia.columnas.map(c => ({titulo: c, num: true,
+                                           formato: charts.num})),
+         {titulo: 'Total', num: true, formato: charts.num}],
+        demografia.filas.map(f => [f.label, ...f.valores, f.total])));
+    }
+
+    // --- Calidad del dato -------------------------------------------------
+    const cuentaSin = clave => iaas.porDim(filas, clave)
+      .filter(e => e.label === sinDato)
+      .reduce((x, e) => x + e.casos, 0);
+    contenedor.appendChild(tarjetaTabla(
+      'Calidad del registro',
+      'Lo que falta en el sistema. Cada hueco es un caso que no entra en ' +
+      'alguna de las tarjetas de arriba.',
+      [{titulo: 'Hueco'}, {titulo: 'Casos', num: true, formato: charts.num}],
+      [['Sin fecha de notificación (periodo completo)', meta.sin_fecha],
+       ['Fechas rescatadas del export de Kobo', meta.fechas_rescatadas],
+       ['Sin servicio', cuentaSin('servicio')],
+       ['Sin ubicación', cuentaSin('ubicacion')],
+       ['Sin diagnóstico de IAAS', cuentaSin('diagnostico')],
+       ['Sin investigación registrada', k.casos - k.investigados],
+       ['Investigación abierta', k.investigados - k.cerrados],
+       ['VIGEPES-08 pendiente (confirmados)', k.pendientes]]));
   }
 
   function irA(vista, clave) {
@@ -1729,12 +1883,15 @@ const app = (() => {
     return label;
   }
 
-  const FILTROS_IAAS = ['responsable', 'servicio', 'actividad'];
-  const ETIQUETAS_IAAS = {responsable: 'Responsable', servicio: 'Servicio',
-                          actividad: 'Actividad'};
+  const FILTROS_IAAS = ['definicion', 'servicio', 'ubicacion', 'diagnostico',
+                        'origen', 'microorganismo', 'dispositivo'];
+  const ETIQUETAS_IAAS = {definicion: 'Definición', servicio: 'Servicio',
+                          ubicacion: 'Ubicación', diagnostico: 'Diagnóstico',
+                          origen: 'Origen', microorganismo: 'Microorganismo',
+                          dispositivo: 'Dispositivo'};
 
   function opcionesIaas(clave) {
-    return clave === 'actividad' ? DATA.iaas.actividades : DATA.iaas.dims[clave];
+    return DATA.iaas.dims[clave];
   }
 
   function selectorIaas(clave) {
@@ -1748,7 +1905,7 @@ const app = (() => {
     opcionesIaas(clave).forEach((valor, i) => {
       const op = document.createElement('option');
       op.value = String(i);
-      op.textContent = valor;   // valor venido de Kobo: textContent, no innerHTML
+      op.textContent = valor;   // valor de la fuente: textContent, no innerHTML
       sel.appendChild(op);
     });
     sel.addEventListener('change', () => {
@@ -1788,10 +1945,10 @@ const app = (() => {
 
   function construirBarra() {
     // La barra se reconstruye al cambiar de pestaña: las dimensiones de
-    // supervisión no existen en Kobo y aparecerían como selectores muertos.
+    // supervisión no existen en vigilancia y saldrían como selectores muertos.
     barra.replaceChildren();
     if (views.estado.vista === 'iaas') {
-      // Sin datos de Kobo no hay nada que filtrar; el aviso lo pinta la vista.
+      // Sin datos de vigilancia no hay qué filtrar; el aviso lo pinta la vista.
       if (!DATA.iaas.ok) return;
       barra.append(fechaIaas('desde', 'Desde'), fechaIaas('hasta', 'Hasta'));
       FILTROS_IAAS.forEach(k => barra.appendChild(selectorIaas(k)));

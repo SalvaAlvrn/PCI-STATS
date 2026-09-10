@@ -14,7 +14,7 @@ from pathlib import Path
 import pandas as pd
 import requests
 
-import kobo
+import iaas as vigilancia
 
 
 class BuildError(Exception):
@@ -446,7 +446,7 @@ def encode(df, formularios, iaas=None):
         "rows": rows,
         # Fuente secundaria: puede venir con datos o con el motivo por el que
         # no los hay. La pestaña se pinta en los dos casos.
-        "iaas": iaas or {"ok": False, "error": "No se consultó KoboToolbox."},
+        "iaas": iaas or {"ok": False, "error": "No se consultó el sistema de IAAS."},
         # NOMBRE_EVALUADO tiene 2012 valores distintos sobre 2806 filas: el
         # diccionario no comprimiría nada. No es dimensión de agregación.
         "texts": {
@@ -521,15 +521,20 @@ def main(argv=None):
     print(f"Áreas nulas rellenadas como «{AREA_NULA}»: {areas}")
     print(f"Responsables distintos: {limpio['RESPONSABLE'].nunique()}")
 
-    # Kobo es una fuente secundaria: si falla, el dashboard de supervisiones
-    # se publica igual. El fallo no se esconde —va a stderr y el workflow lo
-    # convierte en una anotación— y la pestaña muestra el motivo.
+    # La vigilancia de IAAS es una fuente secundaria: si falla, el dashboard
+    # de supervisiones se publica igual. El fallo no se esconde —va a stderr y
+    # el workflow lo convierte en una anotación— y la pestaña muestra el motivo.
     try:
-        iaas = kobo.construir(os.environ.get("KOBO_TOKEN", ""))
-        print(f"IAAS: {iaas['meta']['filas']} envíos, "
-              f"{iaas['meta']['pacientes']} pacientes distintos")
-    except kobo.KoboError as error:
-        iaas = {
+        casos = vigilancia.construir()
+        print(f"IAAS: {casos['meta']['casos']} casos, "
+              f"{casos['meta']['confirmados']} confirmados, "
+              f"{casos['meta']['pacientes']} pacientes distintos")
+        if casos["meta"]["fechas_rescatadas"]:
+            print(f"IAAS: {casos['meta']['fechas_rescatadas']} fechas "
+                  "rescatadas del export de Kobo porque la migración las dejó "
+                  "vacías")
+    except vigilancia.IaasError as error:
+        casos = {
             "ok": False,
             "error": str(error),
             "fecha": pd.Timestamp.now(tz="UTC").strftime("%Y-%m-%d %H:%M UTC"),
@@ -537,23 +542,7 @@ def main(argv=None):
         print(f"AVISO: no se pudo construir el apartado de IAAS: {error}",
               file=sys.stderr)
 
-    # Los casos confirmados son otro formulario y fallan por su cuenta: si su
-    # esquema cambia, el resto del apartado de IAAS se sigue publicando.
-    try:
-        casos = kobo.construir_casos(os.environ.get("KOBO_TOKEN", ""))
-        print(f"IAAS: {casos['meta']['casos']} casos confirmados en "
-              f"{len(casos['dims']['unidad'])} unidades")
-    except kobo.KoboError as error:
-        casos = {
-            "ok": False,
-            "error": str(error),
-            "fecha": pd.Timestamp.now(tz="UTC").strftime("%Y-%m-%d %H:%M UTC"),
-        }
-        print(f"AVISO: no se pudieron construir los casos confirmados: {error}",
-              file=sys.stderr)
-    iaas["casos"] = casos
-
-    data = encode(limpio, formularios, iaas=iaas)
+    data = encode(limpio, formularios, iaas=casos)
     escritos = render_html(
         data, raiz / "template.html", raiz / "vendor" / "chart.umd.min.js", salida
     )
