@@ -15,6 +15,7 @@ import pandas as pd
 import requests
 
 import iaas as vigilancia
+import kobo
 
 
 class BuildError(Exception):
@@ -395,7 +396,7 @@ DIMENSIONES = {
 }
 
 
-def encode(df, formularios, iaas=None):
+def encode(df, formularios, iaas=None, vigilancia=None):
     """Codifica el DataFrame limpio en diccionarios + columnas paralelas."""
     dims = {}
     rows = {}
@@ -444,9 +445,11 @@ def encode(df, formularios, iaas=None):
         "dims": dims,
         "forms": forms,
         "rows": rows,
-        # Fuente secundaria: puede venir con datos o con el motivo por el que
-        # no los hay. La pestaña se pinta en los dos casos.
-        "iaas": iaas or {"ok": False, "error": "No se consultó el sistema de IAAS."},
+        # Fuentes secundarias: cada una puede venir con datos o con el motivo
+        # por el que no los hay. Su pestaña se pinta en los dos casos.
+        "iaas": iaas or {"ok": False, "error": "No se consultó KoboToolbox."},
+        "vigilancia": vigilancia or {
+            "ok": False, "error": "No se consultó el sistema de IAAS."},
         # NOMBRE_EVALUADO tiene 2012 valores distintos sobre 2806 filas: el
         # diccionario no comprimiría nada. No es dimensión de agregación.
         "texts": {
@@ -521,28 +524,56 @@ def main(argv=None):
     print(f"Áreas nulas rellenadas como «{AREA_NULA}»: {areas}")
     print(f"Responsables distintos: {limpio['RESPONSABLE'].nunique()}")
 
-    # La vigilancia de IAAS es una fuente secundaria: si falla, el dashboard
-    # de supervisiones se publica igual. El fallo no se esconde —va a stderr y
-    # el workflow lo convierte en una anotación— y la pestaña muestra el motivo.
-    try:
-        casos = vigilancia.construir()
-        print(f"IAAS: {casos['meta']['casos']} casos, "
-              f"{casos['meta']['confirmados']} confirmados, "
-              f"{casos['meta']['pacientes']} pacientes distintos")
-        if casos["meta"]["fechas_rescatadas"]:
-            print(f"IAAS: {casos['meta']['fechas_rescatadas']} fechas "
-                  "rescatadas del export de Kobo porque la migración las dejó "
-                  "vacías")
-    except vigilancia.IaasError as error:
-        casos = {
+    # Las dos fuentes de IAAS son secundarias y fallan por separado: si una
+    # se cae, el dashboard se publica igual y solo su pestaña muestra el
+    # motivo. El fallo no se esconde —va a stderr y el workflow lo convierte
+    # en una anotación.
+    def _fallo(error):
+        return {
             "ok": False,
             "error": str(error),
             "fecha": pd.Timestamp.now(tz="UTC").strftime("%Y-%m-%d %H:%M UTC"),
         }
-        print(f"AVISO: no se pudo construir el apartado de IAAS: {error}",
+
+    # Investigación de IAAS: producción declarada en el formulario de Kobo.
+    try:
+        investigacion = kobo.construir(os.environ.get("KOBO_TOKEN", ""))
+        print(f"IAAS: {investigacion['meta']['filas']} envíos, "
+              f"{investigacion['meta']['pacientes']} pacientes distintos")
+    except kobo.KoboError as error:
+        investigacion = _fallo(error)
+        print(f"AVISO: no se pudo construir la investigación de IAAS: {error}",
               file=sys.stderr)
 
-    data = encode(limpio, formularios, iaas=casos)
+    # Los casos confirmados son otro formulario de Kobo y fallan por su cuenta:
+    # si su esquema cambia, el resto de esa pestaña se sigue publicando.
+    try:
+        casos_kobo = kobo.construir_casos(os.environ.get("KOBO_TOKEN", ""))
+        print(f"IAAS: {casos_kobo['meta']['casos']} casos confirmados en "
+              f"{len(casos_kobo['dims']['unidad'])} unidades")
+    except kobo.KoboError as error:
+        casos_kobo = _fallo(error)
+        print(f"AVISO: no se pudieron construir los casos confirmados: {error}",
+              file=sys.stderr)
+    investigacion["casos"] = casos_kobo
+
+    # Vigilancia de IAAS: el sistema de Epidemiología en Google Sheets.
+    try:
+        casos = vigilancia.construir()
+        print(f"Vigilancia: {casos['meta']['casos']} casos, "
+              f"{casos['meta']['confirmados']} confirmados, "
+              f"{casos['meta']['pacientes']} pacientes distintos")
+        if casos["meta"]["fechas_rescatadas"]:
+            print(f"Vigilancia: {casos['meta']['fechas_rescatadas']} fechas "
+                  "rescatadas del export de Kobo porque la migración las dejó "
+                  "vacías")
+    except vigilancia.IaasError as error:
+        casos = _fallo(error)
+        print(f"AVISO: no se pudo construir la vigilancia de IAAS: {error}",
+              file=sys.stderr)
+
+    data = encode(limpio, formularios, iaas=investigacion,
+                  vigilancia=casos)
     escritos = render_html(
         data, raiz / "template.html", raiz / "vendor" / "chart.umd.min.js", salida
     )

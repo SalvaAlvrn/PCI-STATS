@@ -56,11 +56,14 @@ jobs:
 
       - name: Construir desde el Sheet en vivo
         # Aborta si el documento cambió de forma. La URL conserva entonces
-        # la última versión buena. El libro de IAAS se lee sin credenciales:
-        # si no responde o cambió de forma, el dashboard se publica sin ese
-        # apartado y el paso siguiente marca el run.
+        # la última versión buena. Las dos fuentes de IAAS son opcionales:
+        # si KOBO_TOKEN falta, si Kobo falla o si el libro de vigilancia no
+        # responde, el dashboard se publica sin esa pestaña y el paso
+        # siguiente marca el run.
         run: python build_dashboard.py 2> >(tee construccion.err >&2)
         shell: bash
+        env:
+          KOBO_TOKEN: ${{ secrets.KOBO_TOKEN }}
 
       - name: Avisar si el apartado de IAAS no se pudo construir
         if: always()

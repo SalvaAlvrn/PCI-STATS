@@ -8,6 +8,7 @@ import requests
 
 import build_dashboard
 import iaas
+import kobo
 from build_dashboard import (
     AREA_NULA,
     BuildError,
@@ -501,6 +502,39 @@ def test_encode_sin_iaas_deja_el_bloque_con_el_motivo(registros_ok,
     assert data["iaas"]["error"] == "HTTP 401"
 
 
+def test_encode_lleva_las_dos_fuentes_de_iaas_por_separado(registros_ok,
+                                                           formularios_ok,
+                                                           nombres_ok):
+    """Cada pestaña tiene su bloque: una fuente caída no vacía a la otra."""
+    limpio = clean(registros_ok, formularios_ok, nombres_ok)
+    data = encode(limpio, formularios_ok,
+                  iaas={"ok": False, "error": "HTTP 401"},
+                  vigilancia={"ok": True, "meta": {"casos": 7}})
+    assert data["iaas"]["ok"] is False
+    assert data["vigilancia"]["meta"]["casos"] == 7
+
+
+def test_main_publica_igual_cuando_kobo_falla(libro_real, capsys):
+    """El formulario de Kobo caído no impide publicar, ni vacía la vigilancia."""
+    capturado = {}
+
+    def espia(data, template, vendor, salida):
+        capturado["data"] = data
+        return 0
+
+    with patch("build_dashboard.kobo.construir",
+               side_effect=kobo.KoboError("HTTP 401")),          patch("build_dashboard.kobo.construir_casos",
+               side_effect=kobo.KoboError("HTTP 401")),          patch("build_dashboard.render_html", side_effect=espia):
+        codigo = build_dashboard.main([str(libro_real)])
+
+    assert codigo == 0
+    assert capturado["data"]["iaas"]["ok"] is False
+    assert capturado["data"]["iaas"]["error"] == "HTTP 401"
+    assert capturado["data"]["iaas"]["casos"]["ok"] is False
+    salida = capsys.readouterr()
+    assert "HTTP 401" in salida.out + salida.err
+
+
 def test_main_publica_igual_cuando_la_vigilancia_falla(libro_real, capsys):
     """main() no escribe en disco aquí: render_html se sustituye por un espía.
 
@@ -518,10 +552,32 @@ def test_main_publica_igual_cuando_la_vigilancia_falla(libro_real, capsys):
         codigo = build_dashboard.main([str(libro_real)])
 
     assert codigo == 0
-    assert capturado["data"]["iaas"]["ok"] is False
-    assert capturado["data"]["iaas"]["error"] == "HTTP 403"
+    assert capturado["data"]["vigilancia"]["ok"] is False
+    assert capturado["data"]["vigilancia"]["error"] == "HTTP 403"
     salida = capsys.readouterr()
     assert "HTTP 403" in salida.out + salida.err
+
+
+def test_el_html_generado_no_contiene_datos_de_paciente_de_kobo(tmp_path):
+    """La promesa de privacidad del apartado de investigación, sobre el HTML.
+
+    Se construye con un envío sintético cuyos campos personales son cadenas
+    inconfundibles y se comprueba que ninguna sobrevive al archivo publicado.
+    """
+    from test_kobo import envio, esquema_completo
+
+    with patch("kobo.descargar", return_value=(esquema_completo(), [envio()])):
+        bloque = kobo.construir("t0ken")
+    plantilla = tmp_path / "t.html"
+    plantilla.write_text("<html>/*__DATA__*/ /*__CHARTJS__*/</html>", "utf-8")
+    vendor = tmp_path / "chart.js"
+    vendor.write_text("// chart", "utf-8")
+    salida = tmp_path / "d.html"
+    render_html({"iaas": bloque}, plantilla, vendor, salida)
+    html = salida.read_text("utf-8")
+    assert "PACIENTE_SINTETICO_XYZ" not in html
+    assert "EXP-999999" not in html
+    assert "CONCLUSION_SINTETICA_XYZ" not in html
 
 
 def test_el_html_generado_no_contiene_datos_de_paciente(tmp_path):

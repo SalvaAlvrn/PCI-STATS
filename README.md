@@ -30,13 +30,57 @@ rompió— el workflow se detiene y **no publica**: la URL sigue mostrando la ú
 versión buena. Es deliberado: el dashboard prefiere estar desactualizado a
 mostrar cifras equivocadas.
 
+## Los dos apartados de IAAS
+
+El dashboard tiene dos pestañas de IAAS, con fuentes distintas que fallan por
+separado. Conviven a propósito mientras el equipo termina de pasarse al sistema
+nuevo: si una fuente se cae, su pestaña muestra el motivo y la otra se sigue
+publicando.
+
+| Pestaña | Fuente | Mide |
+|---|---|---|
+| Investigación de IAAS | Formularios de KoboToolbox | Producción declarada de PCI y casos confirmados por área |
+| Vigilancia de IAAS | Libro «Sistema IAAS» v6.5 en Google Sheets | El caso epidemiológico completo |
+
+## El apartado de investigación de IAAS
+
+La pestaña "Investigación de IAAS" se alimenta del formulario de KoboToolbox
+`aefXsYwJo5RsrZYfaCEcva` en `kf.kobotoolbox.org`, y abre con los casos
+confirmados del formulario `ab9ihfUpzVx7UXnTJUvygP` ("Seguimiento Pacientes con
+IAAS"). Ambos se leen en cada ejecución del workflow.
+
+Necesita el secret **`KOBO_TOKEN`** (Settings → Secrets and variables →
+Actions) con un token de la API de Kobo. Sin él, o si Kobo no responde, el
+dashboard **se publica igual**: la pestaña muestra el motivo y la hora del
+intento, y el run queda marcado con un aviso en Actions.
+
+El apartado mide **producción, no cumplimiento**: cuántos registros declaran
+cada actividad, por quién, en qué servicio y en qué mes. Destaca las tres
+actividades principales —casos nuevos investigados, casos en seguimiento y
+cierre de casos— con un KPI cada una; las otras tres se monitorean en su propia
+tarjeta, al final. Las respuestas SI/NO de cada actividad se leen en Kobo pero
+**no se publican**: un `NO` nuevo en el formulario no aparecerá en ninguna parte
+del dashboard.
+
+Del formulario de producción solo se publican fecha, responsable, servicio y
+actividades declaradas; del de casos, fecha de notificación, unidad y
+subservicio. Nombre, expediente, diagnóstico, conclusiones y observaciones no
+salen del proceso de construcción: `kobo.py` los descarta con una lista blanca,
+y una prueba comprueba que no aparecen en el HTML generado.
+
+Los casos confirmados se reparten por la **ubicación del paciente**, no por
+dónde se adquirió la infección, en sus dos niveles (`Ubi1` y `Ubi2`–`Ubi8`).
+Solo el rango de fechas filtra esas tarjetas —responsable, servicio y actividad
+son dimensiones del formulario de producción, que no existen en el de casos—, y
+la propia tarjeta lo dice.
+
 ## El apartado de vigilancia de IAAS
 
 La pestaña "Vigilancia de IAAS" se alimenta del libro **Sistema IAAS v6.5** de
 la Unidad de Epidemiología, en Google Sheets
 (`1fpUICeal47RTZeWwpyD_gR21yjgqp26OwHd6D4-YW50`), leído en cada ejecución del
-workflow. Sustituye a los dos formularios de KoboToolbox, que se migraron a ese
-sistema: ya no hace falta el secret `KOBO_TOKEN`.
+workflow. Es el destino de la migración de los dos formularios de KoboToolbox,
+que siguen alimentando la otra pestaña mientras dure la transición.
 
 El libro es público con el enlace, así que la lectura no lleva credenciales. Si
 alguna vez deja de serlo, la construcción falla con un 403 explícito y el

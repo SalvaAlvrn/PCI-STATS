@@ -138,7 +138,8 @@ tfoot td { font-weight: 600; border-top: 2px solid var(--border); border-bottom:
     <button role="tab" data-view="global" aria-selected="true">Global</button>
     <button role="tab" data-view="responsable" aria-selected="false">Por responsable</button>
     <button role="tab" data-view="formulario" aria-selected="false">Por formulario</button>
-    <button role="tab" data-view="iaas" aria-selected="false">Vigilancia de IAAS</button>
+    <button role="tab" data-view="iaas" aria-selected="false">Investigación de IAAS</button>
+    <button role="tab" data-view="vigilancia" aria-selected="false">Vigilancia de IAAS</button>
   </div>
 
   <div class="filters" id="filters"></div>
@@ -188,6 +189,28 @@ const store = (() => {
           activeRows, set, clear, clearAll, onChange, emit};
 })();
 </script>
+<script id="mod-store-vigilancia">
+/** Filtros del apartado de vigilancia de IAAS.
+ *
+ * Store propio y no una rama del anterior: las dimensiones son otras y
+ * mezclarlas dejaría selectores muertos en las dos vistas.
+ */
+const storeVig = (() => {
+  const filters = {desde: null, hasta: null, definicion: null, servicio: null,
+                   ubicacion: null, diagnostico: null, origen: null,
+                   microorganismo: null, dispositivo: null};
+  const oyentes = [];
+  function set(clave, valor) { filters[clave] = valor; emit(); }
+  function clear(clave) { filters[clave] = null; emit(); }
+  function clearAll() {
+    Object.keys(filters).forEach(k => { filters[k] = null; });
+    emit();
+  }
+  function onChange(fn) { oyentes.push(fn); }
+  function emit() { oyentes.forEach(fn => fn()); }
+  return {filters, set, clear, clearAll, onChange, emit};
+})();
+</script>
 <script id="mod-store-iaas">
 /** Filtros del apartado de IAAS.
  *
@@ -195,9 +218,8 @@ const store = (() => {
  * mezclarlas dejaría selectores muertos en las dos vistas.
  */
 const storeIaas = (() => {
-  const filters = {desde: null, hasta: null, definicion: null, servicio: null,
-                   ubicacion: null, diagnostico: null, origen: null,
-                   microorganismo: null, dispositivo: null};
+  const filters = {desde: null, hasta: null, responsable: null,
+                   servicio: null, actividad: null};
   const oyentes = [];
   function set(clave, valor) { filters[clave] = valor; emit(); }
   function clear(clave) { filters[clave] = null; emit(); }
@@ -353,18 +375,18 @@ function crearAgg(dataset) {
 }
 const agg = crearAgg(DATA);
 </script>
-<script id="mod-iaas">
-/** Agregación del apartado de IAAS.
+<script id="mod-vigilancia">
+/** Agregación del apartado de vigilancia de IAAS.
  *
  * Una fila por caso vigilado. Todo se recalcula sobre el subconjunto que
  * dejan los filtros: si las tarjetas clínicas trajesen totales precalculados,
  * dirían una cosa distinta de la que el filtro promete.
  */
-function crearIaas(iaas) {
-  const r = iaas.rows;
+function crearVigilancia(vig) {
+  const r = vig.rows;
   const n = r.dia.length;
-  const E = iaas.etiquetas;
-  const iConfirmado = iaas.dims.definicion.indexOf(E.confirmado);
+  const E = vig.etiquetas;
+  const iConfirmado = vig.dims.definicion.indexOf(E.confirmado);
 
   // Dimensiones de un valor por caso; el filtro compara el índice.
   const SIMPLES = ['definicion', 'servicio', 'ubicacion', 'diagnostico',
@@ -396,7 +418,7 @@ function crearIaas(iaas) {
 
   const esConfirmado = i => r.definicion[i] === iConfirmado;
   const confirmados = filas => filas.filter(esConfirmado);
-  const indiceDe = (clave, etiqueta) => iaas.dims[clave].indexOf(etiqueta);
+  const indiceDe = (clave, etiqueta) => vig.dims[clave].indexOf(etiqueta);
 
   // Más casos arriba; a igualdad, alfabético para que no baile entre builds.
   const ordenar = filas => filas.sort(
@@ -442,14 +464,14 @@ function crearIaas(iaas) {
   }
 
   function porDim(filas, clave) {
-    const etiquetas = iaas.dims[clave];
+    const etiquetas = vig.dims[clave];
     const acc = new Map();
     for (const i of filas) acc.set(r[clave][i], (acc.get(r[clave][i]) || 0) + 1);
     return ordenar([...acc].map(([k, casos]) => ({label: etiquetas[k], casos})));
   }
 
   function porMulti(filas, clave) {
-    const etiquetas = iaas.dims[clave];
+    const etiquetas = vig.dims[clave];
     const matriz = r[clave];
     const salida = [];
     for (let k = 0; k < etiquetas.length; k++) {
@@ -463,7 +485,7 @@ function crearIaas(iaas) {
 
   /** Recuento de una dimensión cruzado con otra: fallecidos por diagnóstico. */
   function porDimCon(filas, clave, claveMarca, etiquetaMarca) {
-    const etiquetas = iaas.dims[clave];
+    const etiquetas = vig.dims[clave];
     const marca = indiceDe(claveMarca, etiquetaMarca);
     const acc = new Map();
     for (const i of filas) {
@@ -478,7 +500,7 @@ function crearIaas(iaas) {
 
   /** Serie temporal: confirmados frente al resto de notificaciones. */
   function serie(filas, periodo) {
-    const etiquetas = iaas.dims[periodo];
+    const etiquetas = vig.dims[periodo];
     const conf = etiquetas.map(() => 0);
     const otros = etiquetas.map(() => 0);
     for (const i of filas) {
@@ -500,7 +522,7 @@ function crearIaas(iaas) {
    * publicarse como la tasa oficial. La tarjeta lo dice.
    */
   function dispositivos(filas) {
-    const etiquetas = iaas.dims.dispositivo;
+    const etiquetas = vig.dims.dispositivo;
     const salida = [];
     for (let t = 0; t < etiquetas.length; t++) {
       let casos = 0, dias = 0, si = 0, no = 0;
@@ -535,8 +557,8 @@ function crearIaas(iaas) {
 
   /** Cruce dimensión × dimensión. `multiFila` para las dimensiones matriz. */
   function cruce(filas, claveFila, claveCol, multiFila) {
-    const etiquetasFila = iaas.dims[claveFila];
-    const etiquetasCol = iaas.dims[claveCol];
+    const etiquetasFila = vig.dims[claveFila];
+    const etiquetasCol = vig.dims[claveCol];
     const celdas = etiquetasFila.map(() => etiquetasCol.map(() => 0));
     for (const i of filas) {
       const c = r[claveCol][i];
@@ -560,6 +582,88 @@ function crearIaas(iaas) {
 
   return {filasActivas, confirmados, kpis, embudo, porDim, porMulti, porDimCon,
           serie, dispositivos, intervalo, cruce};
+}
+</script>
+<script id="mod-iaas">
+/** Agregación del apartado de IAAS.
+ *
+ * Mide producción: cuántos envíos declararon cada actividad, por quién,
+ * dónde y cuándo. Las respuestas SI/NO del formulario no se publican, así
+ * que aquí no hay tasas — solo recuentos.
+ */
+function crearIaas(iaas) {
+  const r = iaas.rows;
+  const n = iaas.meta.filas;
+  const nAct = iaas.actividades.length;
+
+  function filasActivas(f) {
+    const out = [];
+    for (let i = 0; i < n; i++) {
+      if (f.desde !== null && r.dia[i] < f.desde) continue;
+      if (f.hasta !== null && r.dia[i] > f.hasta) continue;
+      if (f.responsable !== null && r.responsable[i] !== f.responsable) continue;
+      if (f.servicio !== null && r.servicio[i] !== f.servicio) continue;
+      if (f.actividad !== null && r.actividades[f.actividad][i] !== 1) continue;
+      out.push(i);
+    }
+    return out;
+  }
+
+  /** Recuento de envíos que declararon cada actividad. */
+  function cuenta(filas) {
+    const out = new Array(nAct).fill(0);
+    for (const i of filas) {
+      for (let a = 0; a < nAct; a++) if (r.actividades[a][i] === 1) out[a]++;
+    }
+    return out;
+  }
+
+  function kpis(filas) {
+    return {registros: filas.length, porActividad: cuenta(filas)};
+  }
+
+  function porActividad(filas) {
+    const c = cuenta(filas);
+    return iaas.actividades.map((label, a) => ({
+      idx: a, label, registros: c[a], principal: a < iaas.principales
+    }));
+  }
+
+  function porDim(filas, clave) {
+    const etiquetas = iaas.dims[clave];
+    const acc = new Map();
+    for (const i of filas) {
+      const idx = r[clave][i];
+      let e = acc.get(idx);
+      if (!e) {
+        e = {idx, label: etiquetas[idx], registros: 0,
+             actividades: new Array(nAct).fill(0)};
+        acc.set(idx, e);
+      }
+      e.registros++;
+      for (let a = 0; a < nAct; a++) if (r.actividades[a][i] === 1) e.actividades[a]++;
+    }
+    const salida = [...acc.values()];
+    // Quien más produce, arriba. A igualdad de volumen, orden alfabético
+    // para que el listado no baile entre builds.
+    salida.sort((a, b) => b.registros - a.registros ||
+                          a.label.localeCompare(b.label, 'es'));
+    return salida;
+  }
+
+  function series(filas, periodo) {
+    const etiquetas = iaas.dims[periodo];
+    const vol = etiquetas.map(() => 0);
+    const porAct = iaas.actividades.map(() => etiquetas.map(() => 0));
+    for (const i of filas) {
+      const k = r[periodo][i];
+      vol[k]++;
+      for (let a = 0; a < nAct; a++) if (r.actividades[a][i] === 1) porAct[a][k]++;
+    }
+    return {labels: etiquetas, volumen: vol, porActividad: porAct};
+  }
+
+  return {filasActivas, kpis, porActividad, porDim, series};
 }
 </script>
 <script id="mod-charts">
@@ -927,8 +1031,11 @@ const charts = (() => {
 const views = (() => {
   const estado = {vista: 'global', responsable: null, formulario: null};
   const contenedor = document.getElementById('view');
-  // Null cuando la fuente falló: renderIaas pinta el aviso en su lugar.
+  // Null cuando su fuente falló: cada render pinta el aviso en su lugar. Son
+  // dos fuentes distintas y fallan por separado: el formulario de Kobo puede
+  // estar caído con el libro de vigilancia entero, y al revés.
   const iaas = DATA.iaas.ok ? crearIaas(DATA.iaas) : null;
+  const vigilancia = DATA.vigilancia.ok ? crearVigilancia(DATA.vigilancia) : null;
 
   /** Card con título y, opcionalmente, un botón que alterna gráfico/tabla. */
   function card(titulo, subtitulo) {
@@ -1028,9 +1135,10 @@ const views = (() => {
   function render() {
     charts.destroyAll();
     contenedor.replaceChildren();
-    // La vista de IAAS tiene su propia fuente y sus propios filtros: no pasa
-    // por store.activeRows().
+    // Las vistas de IAAS tienen su propia fuente y sus propios filtros: no
+    // pasan por store.activeRows().
     if (estado.vista === 'iaas') { renderIaas(); return; }
+    if (estado.vista === 'vigilancia') { renderVigilancia(); return; }
     const filas = store.activeRows();
     if (!filas.length) {
       contenedor.appendChild(vacio('Sin registros para estos filtros.'));
@@ -1324,6 +1432,269 @@ const views = (() => {
     contenedor.appendChild(tForm);
   }
 
+  /** «CASOS NUEVOS INVESTIGADOS» -> «Casos nuevos investigados».
+   *
+   * Kobo guarda las actividades en mayúsculas; en un KPI o una cabecera de
+   * tabla eso grita y además ocupa más de lo que cabe.
+   */
+  const TITULO_ACTIVIDAD = etiqueta =>
+    etiqueta.charAt(0) + etiqueta.slice(1).toLowerCase();
+
+  /** Recuento de casos confirmados por dimensión, solo con el filtro de fechas.
+   *
+   * Los otros filtros de la pestaña —responsable, servicio, actividad— son del
+   * formulario de producción y no existen en el de casos. Aplicarlos aquí daría
+   * un número que no significa nada, así que las tarjetas de casos lo dicen en
+   * vez de fingir que están filtradas.
+   */
+  function casosPorDim(casos, clave, f) {
+    const r = casos.rows;
+    const cuenta = new Map();
+    let total = 0;
+    for (let i = 0; i < r.dia.length; i++) {
+      if (f.desde !== null && r.dia[i] < f.desde) continue;
+      if (f.hasta !== null && r.dia[i] > f.hasta) continue;
+      total++;
+      const k = r[clave][i];
+      cuenta.set(k, (cuenta.get(k) || 0) + 1);
+    }
+    const filas = [...cuenta].map(([k, n]) => ({label: casos.dims[clave][k], casos: n}));
+    // Más casos arriba; a igualdad, alfabético para que no baile entre builds.
+    filas.sort((a, b) => b.casos - a.casos || a.label.localeCompare(b.label, 'es'));
+    return {filas, total};
+  }
+
+  /** Tarjeta de casos confirmados por área, con gráfico y tabla. */
+  function tarjetaCasos(titulo, subtitulo, datos) {
+    const tarjeta = card(titulo, subtitulo);
+    conTabla(tarjeta,
+      [{titulo: 'Área'}, {titulo: 'Casos', num: true, formato: charts.num}],
+      datos.map(e => [e.label, e.casos]),
+      zona => {
+        const caja = document.createElement('div');
+        caja.className = 'plot';
+        caja.style.height = Math.max(140, datos.length * 26 + 40) + 'px';
+        const lienzo = document.createElement('canvas');
+        caja.appendChild(lienzo);
+        zona.appendChild(caja);
+        charts.bars(lienzo, {
+          labels: datos.map(e => e.label),
+          values: datos.map(e => e.casos),
+          formato: charts.num
+        });
+      });
+    return tarjeta;
+  }
+
+  /** Casos de IAAS confirmados, por unidad y por subservicio.
+   *
+   * Fuente distinta a la de producción —otro formulario de Kobo—, así que se
+   * pinta antes y aparte: si el de producción falla, esto se sigue viendo.
+   */
+  function renderCasos() {
+    const casos = DATA.iaas.casos;
+    if (!casos) return;
+    if (!casos.ok) {
+      contenedor.appendChild(vacio(
+        'Casos confirmados no disponibles: ' + casos.error +
+        (casos.fecha ? ' (último intento: ' + casos.fecha + ')' : '')));
+      return;
+    }
+    const f = storeIaas.filters;
+    const unidades = casosPorDim(casos, 'unidad', f);
+    const sub = casosPorDim(casos, 'subservicio', f);
+
+    const fila = document.createElement('div');
+    fila.className = 'kpis';
+    fila.style.marginBottom = '16px';
+    fila.appendChild(kpi('IAAS confirmadas', charts.num(unidades.total)));
+    fila.appendChild(kpi('Unidades con casos', charts.num(unidades.filas.length)));
+    contenedor.appendChild(fila);
+
+    const nota = document.createElement('div');
+    nota.className = 'sub';
+    nota.style.marginBottom = '16px';
+    nota.textContent = 'Casos con «Definición de caso: Confirmado», por la ' +
+      'ubicación del paciente. Solo el rango de fechas filtra estas tarjetas: ' +
+      'responsable, servicio y actividad son del formulario de producción.';
+    contenedor.appendChild(nota);
+
+    if (!unidades.total) {
+      contenedor.appendChild(vacio('Sin casos confirmados en este rango de fechas.'));
+      return;
+    }
+    contenedor.appendChild(tarjetaCasos(
+      'IAAS confirmadas por unidad', 'Unidad o servicio donde está el paciente.',
+      unidades.filas));
+    contenedor.appendChild(tarjetaCasos(
+      'IAAS confirmadas por subservicio', 'El segundo nivel del área.',
+      sub.filas));
+  }
+
+  function renderIaas() {
+    renderCasos();
+    if (!DATA.iaas.ok) {
+      // La pestaña sigue existiendo y dice por qué no hay datos: si
+      // desapareciera, un fallo de Kobo pasaría por "aquí nunca hubo nada".
+      contenedor.appendChild(vacio(
+        'Datos de Kobo no disponibles: ' + DATA.iaas.error +
+        (DATA.iaas.fecha ? ' (último intento: ' + DATA.iaas.fecha + ')' : '')));
+      return;
+    }
+    const filas = iaas.filasActivas(storeIaas.filters);
+    if (!filas.length) {
+      contenedor.appendChild(vacio('Sin registros para estos filtros.'));
+      return;
+    }
+    const acts = DATA.iaas.actividades;
+    const nPrin = DATA.iaas.principales;
+    const k = iaas.kpis(filas);
+
+    // Las tres principales, cada una con su KPI. Las demás se monitorean más
+    // abajo: siguen visibles, pero no compiten por la primera pantalla.
+    const fila = document.createElement('div');
+    fila.className = 'kpis';
+    fila.style.marginBottom = '16px';
+    fila.appendChild(kpi('Registros', charts.num(k.registros)));
+    for (let a = 0; a < nPrin; a++) {
+      fila.appendChild(kpi(TITULO_ACTIVIDAD(acts[a]),
+                           charts.num(k.porActividad[a])));
+    }
+    contenedor.appendChild(fila);
+
+    // Los pacientes distintos no son filtrables: contarlos por filtro
+    // exigiría publicar un identificador por fila, y fecha + servicio +
+    // responsable basta para reidentificar a alguien. Solo el total.
+    const nota = document.createElement('div');
+    nota.className = 'sub';
+    nota.style.marginBottom = '16px';
+    nota.textContent = 'Sobre el periodo completo: ' +
+      charts.num(DATA.iaas.meta.pacientes) + ' pacientes distintos.';
+    contenedor.appendChild(nota);
+
+    const porAct = iaas.porActividad(filas);
+    const tAct = card('Producción por actividad',
+                      'Cuántos registros declararon cada actividad.');
+    conTabla(tAct,
+      [{titulo: 'Actividad'}, {titulo: 'Registros', num: true, formato: charts.num}],
+      porAct.map(e => [e.label, e.registros]),
+      zona => {
+        const caja = document.createElement('div');
+        caja.className = 'plot';
+        caja.style.height = Math.max(140, porAct.length * 26 + 40) + 'px';
+        const lienzo = document.createElement('canvas');
+        caja.appendChild(lienzo);
+        zona.appendChild(caja);
+        charts.bars(lienzo, {
+          labels: porAct.map(e => e.label),
+          values: porAct.map(e => e.registros),
+          formato: charts.num
+        });
+      });
+    contenedor.appendChild(tAct);
+
+    // Cuántos casos nuevos aporta cada servicio. La tabla «Por servicio» ya
+    // trae la columna, pero mezclada con el resto de actividades; aquí va
+    // sola y ordenada por ella, que es la pregunta que se hace de verdad:
+    // de dónde salen los casos.
+    const NUEVOS = 0;  // «CASOS NUEVOS INVESTIGADOS», la primera principal.
+    const nuevosPorServicio = iaas.porDim(filas, 'servicio')
+      .map(e => ({label: e.label, casos: e.actividades[NUEVOS]}))
+      // Un servicio con cero casos nuevos no dice nada aquí y alarga la
+      // barra vertical: se queda en la tabla «Por servicio», que sí los lista.
+      .filter(e => e.casos > 0)
+      .sort((a, b) => b.casos - a.casos || a.label.localeCompare(b.label, 'es'));
+    if (nuevosPorServicio.length) {
+      const tNuevos = card(TITULO_ACTIVIDAD(acts[NUEVOS]) + ' por servicio',
+                           'Servicios sin casos nuevos en el periodo no aparecen.');
+      conTabla(tNuevos,
+        [{titulo: 'Servicio'}, {titulo: 'Casos', num: true, formato: charts.num}],
+        nuevosPorServicio.map(e => [e.label, e.casos]),
+        zona => {
+          const caja = document.createElement('div');
+          caja.className = 'plot';
+          caja.style.height = Math.max(140, nuevosPorServicio.length * 26 + 40) + 'px';
+          const lienzo = document.createElement('canvas');
+          caja.appendChild(lienzo);
+          zona.appendChild(caja);
+          charts.bars(lienzo, {
+            labels: nuevosPorServicio.map(e => e.label),
+            values: nuevosPorServicio.map(e => e.casos),
+            formato: charts.num
+          });
+        });
+      contenedor.appendChild(tNuevos);
+    }
+
+    // Evolución mensual: una línea por actividad principal. Es la tarjeta
+    // que responde "¿esto sube o baja?".
+    const s = iaas.series(filas, 'mes');
+    const tEvo = card('Evolución mensual',
+                      'Las tres actividades principales, mes a mes.');
+    const columnas = [{titulo: 'Mes'}];
+    for (let a = 0; a < nPrin; a++) {
+      columnas.push({titulo: TITULO_ACTIVIDAD(acts[a]), num: true,
+                     formato: charts.num});
+    }
+    conTabla(tEvo, columnas,
+      s.labels.map((l, i) => {
+        const f = [l];
+        for (let a = 0; a < nPrin; a++) f.push(s.porActividad[a][i]);
+        return f;
+      }),
+      zona => charts.line(plot(zona, 'i-evo'), {
+        labels: s.labels,
+        formato: charts.num,
+        series: acts.slice(0, nPrin).map((label, a) => ({
+          label,
+          data: s.porActividad[a],
+          color: charts.token('series-' + (a + 1))
+        }))
+      }));
+    contenedor.appendChild(tEvo);
+
+    for (const [clave, titulo] of [['responsable', 'Por responsable'],
+                                   ['servicio', 'Por servicio']]) {
+      const datos = iaas.porDim(filas, clave);
+      const tarjeta = card(titulo, null);
+      const cols = [{titulo: clave === 'responsable' ? 'Responsable' : 'Servicio'},
+                    {titulo: 'Registros', num: true, formato: charts.num}];
+      for (let a = 0; a < nPrin; a++) {
+        cols.push({titulo: TITULO_ACTIVIDAD(acts[a]), num: true,
+                   formato: charts.num});
+      }
+      const total = ['Total (' + datos.length + ')',
+                     datos.reduce((x, e) => x + e.registros, 0)];
+      for (let a = 0; a < nPrin; a++) {
+        total.push(datos.reduce((x, e) => x + e.actividades[a], 0));
+      }
+      charts.tabla(zonaDe(tarjeta), cols,
+        datos.map(e => [e.label, e.registros,
+                        ...e.actividades.slice(0, nPrin)]),
+        {total});
+      contenedor.appendChild(tarjeta);
+    }
+
+    // Las actividades secundarias, por responsable: se monitorean, pero
+    // aparte de las tres que mandan.
+    const secundarias = acts.slice(nPrin);
+    if (secundarias.length) {
+      const datos = iaas.porDim(filas, 'responsable');
+      const tOtras = card('Otras actividades',
+                          'Se monitorean, pero no son las principales.');
+      const cols = [{titulo: 'Responsable'}];
+      secundarias.forEach(label => cols.push({titulo: TITULO_ACTIVIDAD(label),
+                                              num: true, formato: charts.num}));
+      const total = ['Total (' + datos.length + ')'];
+      secundarias.forEach((_, j) => total.push(
+        datos.reduce((x, e) => x + e.actividades[nPrin + j], 0)));
+      charts.tabla(zonaDe(tOtras), cols,
+        datos.map(e => [e.label, ...e.actividades.slice(nPrin)]),
+        {total});
+      contenedor.appendChild(tOtras);
+    }
+  }
+
   /** Barras horizontales dentro de una zona, altas según cuántas filas hay. */
   function barrasEn(zona, datos, valores, formato) {
     const caja = document.createElement('div');
@@ -1365,23 +1736,23 @@ const views = (() => {
   const dias = v => v === null ? '—' : charts.num(v) + ' d';
   const decimales = v => v === null ? '—' : v.toFixed(2);
 
-  function renderIaas() {
-    if (!DATA.iaas.ok) {
+  function renderVigilancia() {
+    if (!DATA.vigilancia.ok) {
       // La pestaña sigue existiendo y dice por qué no hay datos: si
       // desapareciera, un fallo de la fuente pasaría por "aquí nunca hubo nada".
       contenedor.appendChild(vacio(
-        'Datos de vigilancia no disponibles: ' + DATA.iaas.error +
-        (DATA.iaas.fecha ? ' (último intento: ' + DATA.iaas.fecha + ')' : '')));
+        'Datos de vigilancia no disponibles: ' + DATA.vigilancia.error +
+        (DATA.vigilancia.fecha ? ' (último intento: ' + DATA.vigilancia.fecha + ')' : '')));
       return;
     }
-    const meta = DATA.iaas.meta;
-    const filas = iaas.filasActivas(storeIaas.filters);
+    const meta = DATA.vigilancia.meta;
+    const filas = vigilancia.filasActivas(storeVig.filters);
     if (!filas.length) {
       contenedor.appendChild(vacio('Sin casos para estos filtros.'));
       return;
     }
-    const conf = iaas.confirmados(filas);
-    const k = iaas.kpis(filas);
+    const conf = vigilancia.confirmados(filas);
+    const k = vigilancia.kpis(filas);
 
     const cabecera = document.createElement('div');
     cabecera.className = 'kpis';
@@ -1409,14 +1780,14 @@ const views = (() => {
     contenedor.appendChild(nota);
 
     // --- Proceso de vigilancia -------------------------------------------
-    const emb = iaas.embudo(filas);
+    const emb = vigilancia.embudo(filas);
     contenedor.appendChild(tarjetaRanking(
       'Embudo de vigilancia',
       'De la notificación al cierre de la investigación. Las categorías no ' +
       'suman: un caso está en varias.',
       emb, 'Etapa'));
 
-    const s = iaas.serie(filas, 'mes');
+    const s = vigilancia.serie(filas, 'mes');
     const tEvo = card('Evolución mensual',
                       'Casos confirmados frente al resto de notificaciones.');
     conTabla(tEvo,
@@ -1437,9 +1808,9 @@ const views = (() => {
     contenedor.appendChild(tEvo);
 
     const oportunidad = [
-      ['Ingreso → notificación', iaas.intervalo(filas, 'deteccion')],
-      ['Notificación → investigación', iaas.intervalo(filas, 'a_investigacion')],
-      ['Notificación → VIGEPES-08', iaas.intervalo(filas, 'a_vigepes')]
+      ['Ingreso → notificación', vigilancia.intervalo(filas, 'deteccion')],
+      ['Notificación → investigación', vigilancia.intervalo(filas, 'a_investigacion')],
+      ['Notificación → VIGEPES-08', vigilancia.intervalo(filas, 'a_vigepes')]
     ];
     contenedor.appendChild(tarjetaTabla(
       'Oportunidad del proceso',
@@ -1455,15 +1826,15 @@ const views = (() => {
     // --- Dónde y qué ------------------------------------------------------
     contenedor.appendChild(tarjetaRanking(
       'IAAS confirmadas por servicio', 'Servicio donde está el paciente.',
-      iaas.porDim(conf, 'servicio'), 'Servicio'));
+      vigilancia.porDim(conf, 'servicio'), 'Servicio'));
     contenedor.appendChild(tarjetaRanking(
       'IAAS confirmadas por ubicación', 'El segundo nivel del área.',
-      iaas.porDim(conf, 'ubicacion'), 'Ubicación'));
+      vigilancia.porDim(conf, 'ubicacion'), 'Ubicación'));
     contenedor.appendChild(tarjetaRanking(
       'Diagnóstico de IAAS', 'Solo casos confirmados.',
-      iaas.porDim(conf, 'diagnostico'), 'Diagnóstico'));
+      vigilancia.porDim(conf, 'diagnostico'), 'Diagnóstico'));
 
-    const origen = iaas.porDim(conf, 'origen');
+    const origen = vigilancia.porDim(conf, 'origen');
     contenedor.appendChild(tarjetaRanking(
       'Origen de la infección',
       'Extrahospitalario es infección importada: cuenta para la carga ' +
@@ -1471,13 +1842,13 @@ const views = (() => {
       origen, 'Origen'));
 
     // --- Microbiología ----------------------------------------------------
-    const micro = iaas.porMulti(conf, 'microorganismo');
+    const micro = vigilancia.porMulti(conf, 'microorganismo');
     contenedor.appendChild(tarjetaRanking(
       'Microorganismos aislados',
       'Un caso puede aportar más de uno, así que la suma pasa del total.',
       micro, 'Microorganismo'));
 
-    const cruceMicro = iaas.cruce(conf, 'microorganismo', 'servicio', true);
+    const cruceMicro = vigilancia.cruce(conf, 'microorganismo', 'servicio', true);
     if (cruceMicro.filas.length) {
       contenedor.appendChild(tarjetaTabla(
         'Microorganismo por servicio',
@@ -1491,7 +1862,7 @@ const views = (() => {
     }
 
     // --- Dispositivos -----------------------------------------------------
-    const disp = iaas.dispositivos(conf);
+    const disp = vigilancia.dispositivos(conf);
     if (disp.length) {
       const tDisp = card(
         'Dispositivos invasivos',
@@ -1513,17 +1884,17 @@ const views = (() => {
     }
 
     // --- Infección del sitio quirúrgico -----------------------------------
-    const sinDato = DATA.iaas.etiquetas.sin_dato;
-    const herida = iaas.porDim(conf, 'herida').filter(e => e.label !== sinDato);
+    const sinDato = DATA.vigilancia.etiquetas.sin_dato;
+    const herida = vigilancia.porDim(conf, 'herida').filter(e => e.label !== sinDato);
     if (herida.length) {
       contenedor.appendChild(tarjetaRanking(
         'ISQ por clasificación de herida',
         'Limpia, limpia-contaminada, contaminada y sucia tienen riesgo basal ' +
         'distinto: comparar sin separarlas mezcla cosas que no se comparan.',
         herida, 'Clasificación'));
-      const intervencion = iaas.porDim(conf, 'intervencion')
+      const intervencion = vigilancia.porDim(conf, 'intervencion')
         .filter(e => e.label !== sinDato);
-      const procedimiento = iaas.porDim(conf, 'procedimiento')
+      const procedimiento = vigilancia.porDim(conf, 'procedimiento')
         .filter(e => e.label !== sinDato);
       contenedor.appendChild(tarjetaTabla(
         'ISQ por tipo de intervención', null,
@@ -1535,7 +1906,7 @@ const views = (() => {
     }
 
     // --- Desenlace y causas -----------------------------------------------
-    const letalidad = iaas.porDimCon(conf, 'diagnostico', 'condicion', 'Fallecido')
+    const letalidad = vigilancia.porDimCon(conf, 'diagnostico', 'condicion', 'Fallecido')
       .filter(e => e.casos > 0);
     contenedor.appendChild(tarjetaTabla(
       'Letalidad por diagnóstico',
@@ -1552,7 +1923,7 @@ const views = (() => {
        letalidad.reduce((x, e) => x + e.marcados, 0),
        k.letalidad]));
 
-    const causas = iaas.porMulti(conf, 'causa');
+    const causas = vigilancia.porMulti(conf, 'causa');
     if (causas.length) {
       const totalCausas = causas.reduce((x, e) => x + e.casos, 0);
       let acumulado = 0;
@@ -1572,7 +1943,7 @@ const views = (() => {
       contenedor.appendChild(tCausas);
     }
 
-    const cronicas = iaas.porMulti(conf, 'cronica');
+    const cronicas = vigilancia.porMulti(conf, 'cronica');
     if (cronicas.length) {
       contenedor.appendChild(tarjetaRanking(
         'Enfermedades crónicas de base',
@@ -1581,7 +1952,7 @@ const views = (() => {
     }
 
     // --- Demografía -------------------------------------------------------
-    const demografia = iaas.cruce(conf, 'edad', 'sexo', false);
+    const demografia = vigilancia.cruce(conf, 'edad', 'sexo', false);
     if (demografia.filas.length) {
       contenedor.appendChild(tarjetaTabla(
         'Edad y sexo',
@@ -1595,7 +1966,7 @@ const views = (() => {
     }
 
     // --- Calidad del dato -------------------------------------------------
-    const cuentaSin = clave => iaas.porDim(filas, clave)
+    const cuentaSin = clave => vigilancia.porDim(filas, clave)
       .filter(e => e.label === sinDato)
       .reduce((x, e) => x + e.casos, 0);
     contenedor.appendChild(tarjetaTabla(
@@ -1883,48 +2254,67 @@ const app = (() => {
     return label;
   }
 
-  const FILTROS_IAAS = ['definicion', 'servicio', 'ubicacion', 'diagnostico',
-                        'origen', 'microorganismo', 'dispositivo'];
-  const ETIQUETAS_IAAS = {definicion: 'Definición', servicio: 'Servicio',
-                          ubicacion: 'Ubicación', diagnostico: 'Diagnóstico',
-                          origen: 'Origen', microorganismo: 'Microorganismo',
-                          dispositivo: 'Dispositivo'};
+  /** Las pestañas con fuente propia: store, datos y dimensiones filtrables.
+   *
+   * Los selectores, el rango de fechas y los chips son idénticos para las dos
+   * —solo cambia de dónde salen las opciones y a qué store escriben—, así que
+   * se parametrizan en vez de duplicarse: dos copias acabarían divergiendo.
+   */
+  const FUENTES = {
+    iaas: {
+      store: () => storeIaas,
+      datos: () => DATA.iaas,
+      filtros: ['responsable', 'servicio', 'actividad'],
+      etiquetas: {responsable: 'Responsable', servicio: 'Servicio',
+                  actividad: 'Actividad'},
+      // La actividad no es una dimensión codificada: es la lista de columnas.
+      opciones: clave => clave === 'actividad'
+        ? DATA.iaas.actividades : DATA.iaas.dims[clave]
+    },
+    vigilancia: {
+      store: () => storeVig,
+      datos: () => DATA.vigilancia,
+      filtros: ['definicion', 'servicio', 'ubicacion', 'diagnostico', 'origen',
+                'microorganismo', 'dispositivo'],
+      etiquetas: {definicion: 'Definición', servicio: 'Servicio',
+                  ubicacion: 'Ubicación', diagnostico: 'Diagnóstico',
+                  origen: 'Origen', microorganismo: 'Microorganismo',
+                  dispositivo: 'Dispositivo'},
+      opciones: clave => DATA.vigilancia.dims[clave]
+    }
+  };
 
-  function opcionesIaas(clave) {
-    return DATA.iaas.dims[clave];
-  }
-
-  function selectorIaas(clave) {
+  function selectorFuente(fuente, clave) {
     const label = document.createElement('label');
-    label.textContent = ETIQUETAS_IAAS[clave];
+    label.textContent = fuente.etiquetas[clave];
     const sel = document.createElement('select');
     const todos = document.createElement('option');
     todos.value = '';
     todos.textContent = 'Todos';
     sel.appendChild(todos);
-    opcionesIaas(clave).forEach((valor, i) => {
+    fuente.opciones(clave).forEach((valor, i) => {
       const op = document.createElement('option');
       op.value = String(i);
       op.textContent = valor;   // valor de la fuente: textContent, no innerHTML
       sel.appendChild(op);
     });
     sel.addEventListener('change', () => {
-      storeIaas.set(clave, sel.value === '' ? null : Number(sel.value));
+      fuente.store().set(clave, sel.value === '' ? null : Number(sel.value));
     });
     sel.dataset.clave = clave;
     label.appendChild(sel);
     return label;
   }
 
-  function fechaIaas(clave, texto) {
+  function fechaFuente(fuente, clave, texto) {
     const label = document.createElement('label');
     label.textContent = texto;
     const input = document.createElement('input');
     input.type = 'date';
-    input.min = aISO(DATA.iaas.meta.dia_min);
-    input.max = aISO(DATA.iaas.meta.dia_max);
+    input.min = aISO(fuente.datos().meta.dia_min);
+    input.max = aISO(fuente.datos().meta.dia_max);
     input.addEventListener('change', () => {
-      storeIaas.set(clave, input.value ? aDia(input.value) : null);
+      fuente.store().set(clave, input.value ? aDia(input.value) : null);
     });
     input.dataset.clave = clave;
     label.appendChild(input);
@@ -1944,15 +2334,17 @@ const app = (() => {
   }
 
   function construirBarra() {
-    // La barra se reconstruye al cambiar de pestaña: las dimensiones de
-    // supervisión no existen en vigilancia y saldrían como selectores muertos.
+    // La barra se reconstruye al cambiar de pestaña: las dimensiones de una
+    // fuente no existen en las otras y saldrían como selectores muertos.
     barra.replaceChildren();
-    if (views.estado.vista === 'iaas') {
-      // Sin datos de vigilancia no hay qué filtrar; el aviso lo pinta la vista.
-      if (!DATA.iaas.ok) return;
-      barra.append(fechaIaas('desde', 'Desde'), fechaIaas('hasta', 'Hasta'));
-      FILTROS_IAAS.forEach(k => barra.appendChild(selectorIaas(k)));
-      barra.appendChild(botonLimpiar(() => storeIaas.clearAll()));
+    const fuente = FUENTES[views.estado.vista];
+    if (fuente) {
+      // Sin datos no hay qué filtrar; el aviso lo pinta la vista.
+      if (!fuente.datos().ok) return;
+      barra.append(fechaFuente(fuente, 'desde', 'Desde'),
+                   fechaFuente(fuente, 'hasta', 'Hasta'));
+      fuente.filtros.forEach(k => barra.appendChild(selectorFuente(fuente, k)));
+      barra.appendChild(botonLimpiar(() => fuente.store().clearAll()));
       return;
     }
     // El rango de fechas va primero: es el filtro al que todos van.
@@ -1961,21 +2353,21 @@ const app = (() => {
     barra.appendChild(botonLimpiar(() => store.clearAll()));
   }
 
-  function pintarChipsIaas() {
+  function pintarChipsFuente(fuente) {
     zonaChips.replaceChildren();
-    for (const [clave, valor] of Object.entries(storeIaas.filters)) {
+    for (const [clave, valor] of Object.entries(fuente.store().filters)) {
       if (valor === null) continue;
       const chip = document.createElement('button');
       chip.className = 'chip';
       chip.type = 'button';
       const texto = clave === 'desde' ? 'Desde ' + aISO(valor)
         : clave === 'hasta' ? 'Hasta ' + aISO(valor)
-        : ETIQUETAS_IAAS[clave] + ': ' + opcionesIaas(clave)[valor];
+        : fuente.etiquetas[clave] + ': ' + fuente.opciones(clave)[valor];
       chip.textContent = texto + ' ✕';
       chip.addEventListener('click', () => {
         const control = barra.querySelector('[data-clave="' + clave + '"]');
         if (control) control.value = '';
-        storeIaas.clear(clave);
+        fuente.store().clear(clave);
       });
       zonaChips.appendChild(chip);
     }
@@ -2008,7 +2400,8 @@ const app = (() => {
           otro.setAttribute('aria-selected', String(otro === b)));
         views.estado.vista = b.dataset.view;
         construirBarra();
-        if (views.estado.vista === 'iaas') pintarChipsIaas();
+        const fuente = FUENTES[views.estado.vista];
+        if (fuente) pintarChipsFuente(fuente);
         else pintarChips();
         views.render();
       });
@@ -2018,7 +2411,10 @@ const app = (() => {
   construirBarra();
   pestanas();
   store.onChange(() => { pintarChips(); views.render(); });
-  storeIaas.onChange(() => { pintarChipsIaas(); views.render(); });
+  storeIaas.onChange(() => { pintarChipsFuente(FUENTES.iaas); views.render(); });
+  storeVig.onChange(() => {
+    pintarChipsFuente(FUENTES.vigilancia); views.render();
+  });
   // Repintar los gráficos al cambiar de tema: Chart.js copió los colores
   // al construirse y no vuelve a leer las variables CSS por su cuenta.
   window.addEventListener('themechange', () => views.render());
