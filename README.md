@@ -113,7 +113,11 @@ El apartado mide **vigilancia epidemiológica**, no producción de PCI:
   pública eso es una fuga esperando a que alguien escriba ahí un nombre. Para
   recuperarlo, el sistema tendría que convertir el campo en lista de opciones.
 - **Señales** — posibles conglomerados (3 o más casos confirmados del mismo
-  microorganismo, mismo servicio, dentro de 14 días) y curva epidémica semanal
+  microorganismo, mismo servicio, dentro de 14 días), con detalle al pinchar
+  una fila: resumen del grupo y cronología caso a caso. La cronología no lleva
+  edad, sexo ni desenlace por fila —fecha más ubicación ya señalan a una cama
+  concreta y la página es pública—; los desenlaces van contados en el resumen.
+  Y curva epidémica semanal
   con umbral de media móvil de 6 semanas más dos desviaciones típicas. Con
   recuentos de este tamaño el umbral es orientativo: señala variación inusual,
   no prueba un brote, y las tarjetas lo dicen.

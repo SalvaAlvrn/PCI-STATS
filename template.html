@@ -680,29 +680,32 @@ function crearVigilancia(vig) {
         if (r.microorganismo[k][i] !== 1) continue;
         const clave = r.servicio[i] + '|' + k;
         if (!grupos.has(clave)) grupos.set(clave, []);
-        grupos.get(clave).push(r.dia[i]);
+        grupos.get(clave).push({dia: r.dia[i], fila: i});
       }
     }
     const salida = [];
-    for (const [clave, dias] of grupos) {
-      if (dias.length < minimo) continue;
-      dias.sort((a, b) => a - b);
+    for (const [clave, casos] of grupos) {
+      if (casos.length < minimo) continue;
+      casos.sort((x, y) => x.dia - y.dia);
       // Ventana deslizante: la racha más apretada que alcanza el mínimo.
       let mejor = null;
-      for (let a = 0; a < dias.length; a++) {
+      for (let a = 0; a < casos.length; a++) {
         let b = a;
-        while (b + 1 < dias.length && dias[b + 1] - dias[a] <= ventana) b++;
-        const casos = b - a + 1;
-        if (casos >= minimo && (!mejor || casos > mejor.casos)) {
-          mejor = {casos, desde: dias[a], hasta: dias[b]};
+        while (b + 1 < casos.length && casos[b + 1].dia - casos[a].dia <= ventana) b++;
+        const cuantos = b - a + 1;
+        if (cuantos >= minimo && (!mejor || cuantos > mejor.casos)) {
+          mejor = {casos: cuantos, desde: casos[a].dia, hasta: casos[b].dia,
+                   filas: casos.slice(a, b + 1).map(c => c.fila)};
         }
       }
       if (!mejor) continue;
       const [servicio, k] = clave.split('|');
       salida.push({
-        servicio: servicios[servicio], microorganismo: micros[Number(k)],
+        // `clave` identifica al grupo entre repintados: los índices de fila
+        // cambian con los filtros, el par servicio-microorganismo no.
+        clave, servicio: servicios[servicio], microorganismo: micros[Number(k)],
         casos: mejor.casos, desde: fechaLarga(mejor.desde),
-        hasta: fechaLarga(mejor.hasta),
+        hasta: fechaLarga(mejor.hasta), filas: mejor.filas,
         dias: mejor.hasta - mejor.desde
       });
     }
@@ -710,9 +713,57 @@ function crearVigilancia(vig) {
                                  a.servicio.localeCompare(b.servicio, 'es'));
   }
 
+  /** Detalle de un conglomerado: resumen agregado y cronología de sus casos.
+   *
+   * La cronología no lleva edad, sexo ni condición. Fecha + ubicación ya
+   * señalan a una cama concreta de un pabellón concreto, y esta página es
+   * pública: los desenlaces van en el resumen, contados, no fila a fila.
+   */
+  function detalleConglomerado(grupo) {
+    const iFallecido = indiceDe('condicion', 'Fallecido');
+    const iPendiente = indiceDe('vigepes', 'Pendiente');
+    const iExtra = indiceDe('origen', 'Extrahospitalario');
+    let fallecidos = 0, pendientes = 0, importados = 0, abiertas = 0, sinInv = 0;
+    const intervalos = [];
+    let previo = null;
+    const cronologia = [];
+    for (const i of grupo.filas) {
+      if (r.condicion[i] === iFallecido) fallecidos++;
+      if (r.vigepes[i] === iPendiente) pendientes++;
+      if (r.origen[i] === iExtra) importados++;
+      if (r.investigado[i] !== 1) sinInv++;
+      else if (r.cerrado[i] !== 1) abiertas++;
+      if (previo !== null) intervalos.push(r.dia[i] - previo);
+      previo = r.dia[i];
+      cronologia.push({
+        fecha: fechaLarga(r.dia[i]),
+        ubicacion: vig.dims.ubicacion[r.ubicacion[i]],
+        origen: vig.dims.origen[r.origen[i]],
+        estancia: r.deteccion[i],
+        aInvestigacion: r.a_investigacion[i],
+        investigacion: r.investigado[i] !== 1 ? 'Sin registrar'
+          : (r.cerrado[i] === 1 ? 'Cerrada' : 'Abierta')
+      });
+    }
+    intervalos.sort((a, b) => a - b);
+    const mediana = arr => arr.length
+      ? arr[Math.floor(arr.length / 2)] : null;
+    const estancias = grupo.filas.map(i => r.deteccion[i])
+      .filter(v => v !== null).sort((a, b) => a - b);
+    return {
+      cronologia,
+      resumen: {
+        casos: grupo.casos, dias: grupo.dias,
+        intervalo: mediana(intervalos), estancia: mediana(estancias),
+        fallecidos, pendientes, importados, abiertas, sinInv,
+        ubicaciones: new Set(grupo.filas.map(i => r.ubicacion[i])).size
+      }
+    };
+  }
+
   return {filasActivas, confirmados, kpis, embudo, porDim, porMulti, porDimCon,
           serie, dispositivos, intervalo, cruce, excluidosPorFecha, variacion,
-          curva, conglomerados};
+          curva, conglomerados, detalleConglomerado};
 }
 </script>
 <script id="mod-iaas">
@@ -1160,7 +1211,9 @@ const charts = (() => {
 </script>
 <script id="mod-views">
 const views = (() => {
-  const estado = {vista: 'global', responsable: null, formulario: null};
+  const estado = {vista: 'global', responsable: null, formulario: null,
+                 // Conglomerado abierto en la pestaña de vigilancia.
+                 conglomerado: null};
   const contenedor = document.getElementById('view');
   // Null cuando su fuente falló: cada render pinta el aviso en su lugar. Son
   // dos fuentes distintas y fallan por separado: el formulario de Kobo puede
@@ -1853,14 +1906,21 @@ const views = (() => {
     return tarjeta;
   }
 
-  /** Tarjeta de solo tabla, para lo que no gana nada dibujado. */
-  function tarjetaTabla(titulo, subtitulo, columnas, filas, total) {
+  /** Tarjeta de solo tabla, para lo que no gana nada dibujado.
+   *
+   * `onFila` recibe la fila entera —no su posición—, que es lo que sobrevive
+   * a reordenar la tabla, y puede llevar columnas que no se pintan.
+   */
+  function tarjetaTabla(titulo, subtitulo, columnas, filas, total, onFila) {
     const tarjeta = card(titulo, subtitulo);
     if (!filas.length) {
       tarjeta.appendChild(vacio('Sin datos para estos filtros.'));
       return tarjeta;
     }
-    charts.tabla(zonaDe(tarjeta), columnas, filas, total ? {total} : undefined);
+    const opciones = {};
+    if (total) opciones.total = total;
+    if (onFila) opciones.onFila = onFila;
+    charts.tabla(zonaDe(tarjeta), columnas, filas, opciones);
     return tarjeta;
   }
 
@@ -1938,6 +1998,58 @@ const views = (() => {
       setTimeout(() => URL.revokeObjectURL(url), 1000);
     });
     return boton;
+  }
+
+  /** Detalle de un conglomerado: resumen, cronología y qué falta por hacer. */
+  function tarjetaDetalle(grupo) {
+    const d = vigilancia.detalleConglomerado(grupo);
+    const caja = document.createElement('div');
+
+    const tarjeta = card(
+      'Conglomerado: ' + grupo.microorganismo + ' en ' + grupo.servicio,
+      grupo.casos + ' casos confirmados entre el ' + grupo.desde + ' y el ' +
+      grupo.hasta + ', en ' + grupo.dias + ' días.');
+
+    const cerrar = document.createElement('button');
+    cerrar.className = 'chip';
+    cerrar.type = 'button';
+    cerrar.textContent = 'Cerrar detalle ✕';
+    cerrar.addEventListener('click', () => {
+      estado.conglomerado = null;
+      render();
+    });
+    tarjeta.appendChild(cerrar);
+
+    const r = d.resumen;
+    const zona = zonaDe(tarjeta);
+    charts.tabla(zona,
+      [{titulo: 'Dato'}, {titulo: 'Valor', num: true}],
+      [['Casos en la ventana', charts.num(r.casos)],
+       ['Ubicaciones distintas', charts.num(r.ubicaciones)],
+       ['Días entre notificaciones (mediana)', dias(r.intervalo)],
+       ['Días de ingreso a notificación (mediana)', dias(r.estancia)],
+       ['De origen extrahospitalario', charts.num(r.importados)],
+       ['Fallecidos', charts.num(r.fallecidos)],
+       ['VIGEPES-08 pendientes', charts.num(r.pendientes)],
+       ['Investigaciones abiertas', charts.num(r.abiertas)],
+       ['Casos sin investigación registrada', charts.num(r.sinInv)]]);
+
+    caja.appendChild(tarjeta);
+
+    const cronologia = tarjetaTabla(
+      'Cronología del conglomerado',
+      'Una fila por caso, por fecha de notificación. La fecha de notificación ' +
+      'no es la de inicio de síntomas: varios casos notificados el mismo día ' +
+      'suelen ser una búsqueda activa, no contagios simultáneos. Sin edad, ' +
+      'sexo ni desenlace por fila — van contados en el resumen.',
+      [{titulo: 'Notificado'}, {titulo: 'Ubicación'}, {titulo: 'Origen'},
+       {titulo: 'Días desde el ingreso', num: true, formato: dias},
+       {titulo: 'Días hasta investigar', num: true, formato: dias},
+       {titulo: 'Investigación'}],
+      d.cronologia.map(c => [c.fecha, c.ubicacion, c.origen, c.estancia,
+                             c.aInvestigacion, c.investigacion]));
+    caja.appendChild(cronologia);
+    return caja;
   }
 
   function renderVigilancia() {
@@ -2020,13 +2132,23 @@ const views = (() => {
         MINIMO_CONGLOMERADO + ' o más casos confirmados del mismo ' +
         'microorganismo, en el mismo servicio, dentro de ' +
         VENTANA_CONGLOMERADO + ' días. No prueba un brote: es lo que hay que ' +
-        'mirar de cerca antes de que lo sea.',
+        'mirar de cerca antes de que lo sea. Pincha una fila para ver el ' +
+        'detalle.',
         [{titulo: 'Servicio'}, {titulo: 'Microorganismo'},
          {titulo: 'Casos', num: true, formato: charts.num},
          {titulo: 'Días', num: true, formato: charts.num},
          {titulo: 'Desde'}, {titulo: 'Hasta'}],
+        // La clave viaja como séptima celda: `columnas` decide qué se pinta,
+        // así que no se ve, y onFila la recibe entera.
         grupos.map(g => [g.servicio, g.microorganismo, g.casos, g.dias,
-                         g.desde, g.hasta])));
+                         g.desde, g.hasta, g.clave]),
+        null,
+        fila => { estado.conglomerado = fila[6]; render(); }));
+
+      // El detalle se pinta debajo de la tabla, no en lugar de ella: quien
+      // compara dos conglomerados no quiere perder la lista al abrir uno.
+      const abierto = grupos.find(g => g.clave === estado.conglomerado);
+      if (abierto) contenedor.appendChild(tarjetaDetalle(abierto));
     }
 
     // --- Proceso de vigilancia -------------------------------------------
