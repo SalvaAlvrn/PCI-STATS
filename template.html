@@ -7,14 +7,15 @@
 <style>
 :root {
   color-scheme: light;
-  --plane:          #f9f9f7;
-  --surface:        #fcfcfb;
+  --plane:          #eceae4;
+  --surface:        #ffffff;
   --text-primary:   #0b0b0b;
-  --text-secondary: #52514e;
-  --text-muted:     #898781;
-  --grid:           #e1e0d9;
-  --axis:           #c3c2b7;
-  --border:         rgba(11,11,11,0.10);
+  --text-secondary: #4a4945;
+  --text-muted:     #74736e;
+  --grid:           #d8d6cd;
+  --axis:           #a9a89d;
+  --border:         rgba(11,11,11,0.22);
+  --shadow:         0 1px 2px rgba(11,11,11,0.06), 0 2px 8px rgba(11,11,11,0.06);
   --series-1:       #2a78d6;
   --series-2:       #eb6834;
   --series-3:       #1f8f68;
@@ -30,18 +31,20 @@
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
     color-scheme: dark;
-    --plane: #0d0d0d; --surface: #1a1a19;
-    --text-primary: #ffffff; --text-secondary: #c3c2b7; --text-muted: #898781;
-    --grid: #2c2c2a; --axis: #383835; --border: rgba(255,255,255,0.10);
+    --plane: #0b0b0b; --surface: #1f1f1d;
+    --text-primary: #ffffff; --text-secondary: #cfcec6; --text-muted: #98968e;
+    --grid: #34342f; --axis: #4a4a44; --border: rgba(255,255,255,0.20);
+    --shadow: 0 1px 2px rgba(0,0,0,0.5), 0 2px 10px rgba(0,0,0,0.35);
     --series-1: #3987e5; --series-2: #d95926; --series-3: #35b184;
     --context: #52514e;
   }
 }
 :root[data-theme="dark"] {
   color-scheme: dark;
-  --plane: #0d0d0d; --surface: #1a1a19;
-  --text-primary: #ffffff; --text-secondary: #c3c2b7; --text-muted: #898781;
-  --grid: #2c2c2a; --axis: #383835; --border: rgba(255,255,255,0.10);
+  --plane: #0b0b0b; --surface: #1f1f1d;
+  --text-primary: #ffffff; --text-secondary: #cfcec6; --text-muted: #98968e;
+  --grid: #34342f; --axis: #4a4a44; --border: rgba(255,255,255,0.20);
+  --shadow: 0 1px 2px rgba(0,0,0,0.5), 0 2px 10px rgba(0,0,0,0.35);
   --series-1: #3987e5; --series-2: #d95926; --series-3: #35b184;
   --context: #52514e;
 }
@@ -59,6 +62,7 @@ h2 { font-size: 15px; font-weight: 600; margin: 0 0 4px; }
 .card {
   background: var(--surface); border: 1px solid var(--border);
   border-radius: 10px; padding: 16px 18px; margin-bottom: 16px;
+  box-shadow: var(--shadow);
 }
 .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
 @media (max-width: 860px) { .grid-2 { grid-template-columns: 1fr; } }
@@ -67,10 +71,18 @@ h2 { font-size: 15px; font-weight: 600; margin: 0 0 4px; }
    banda del eje X y crearía un scroll anidado dentro del card. */
 .plot { position: relative; height: 260px; }
 
-.kpis { display: flex; flex-wrap: wrap; gap: 12px; }
+/* Un solo marco para toda la fila. El gap de 1px deja ver el fondo del
+   contenedor y hace de separador: con flex-wrap los bordes por celda dejaban
+   filos dobles al saltar de línea. */
+.kpis {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(165px, 1fr));
+  gap: 1px; background: var(--border);
+  border: 1px solid var(--border); border-radius: 10px;
+  overflow: hidden; box-shadow: var(--shadow);
+}
 .kpi {
-  background: var(--surface); border: 1px solid var(--border);
-  border-radius: 10px; padding: 12px 16px; min-width: 150px; flex: 1;
+  background: var(--surface); border: 0; border-radius: 0; box-shadow: none;
+  padding: 12px 16px; min-width: 0;
 }
 .kpi .label { color: var(--text-secondary); font-size: 12px; }
 .kpi .value { font-size: 26px; font-weight: 600; margin-top: 2px; }
@@ -79,7 +91,13 @@ h2 { font-size: 15px; font-weight: 600; margin: 0 0 4px; }
 
 table { border-collapse: collapse; width: 100%; font-size: 13px; }
 th, td { text-align: left; padding: 7px 10px; border-bottom: 1px solid var(--grid); }
-th { color: var(--text-secondary); font-weight: 600; cursor: pointer; }
+th {
+  color: var(--text-secondary); font-weight: 600; cursor: pointer;
+  position: sticky; top: 0; background: var(--surface);
+  border-bottom: 2px solid var(--axis);
+}
+tbody tr:nth-child(even) { background: color-mix(in srgb, var(--plane) 55%, var(--surface)); }
+tbody tr:hover { background: color-mix(in srgb, var(--series-1) 12%, var(--surface)); }
 td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
 tfoot td { font-weight: 600; border-top: 2px solid var(--border); border-bottom: none; }
 .scroll-x { overflow-x: auto; }
@@ -91,8 +109,19 @@ tfoot td { font-weight: 600; border-top: 2px solid var(--border); border-bottom:
 }
 .tabs button[aria-selected="true"] {
   background: var(--surface); color: var(--text-primary); font-weight: 600;
+  border-color: var(--text-primary); box-shadow: inset 0 -2px 0 var(--series-1);
 }
 
+/* Los filtros y sus chips activos viven en un mismo bloque: sueltos sobre el
+   plano no se leían como un control único. */
+.panel {
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: 10px; padding: 12px 14px; margin-bottom: 16px;
+  box-shadow: var(--shadow);
+}
+.panel .filters, .panel .chips { margin-bottom: 0; }
+.panel .chips { margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--grid); }
+.panel .chips:empty { display: none; }
 .filters { display: flex; flex-wrap: wrap; gap: 8px; align-items: flex-end; margin-bottom: 12px; }
 .filters label { display: flex; flex-direction: column; font-size: 12px; color: var(--text-secondary); gap: 3px; }
 .filters select, .filters input {
@@ -117,7 +146,7 @@ tfoot td { font-weight: 600; border-top: 2px solid var(--border); border-bottom:
   position: fixed; pointer-events: none; z-index: 20; display: none;
   background: var(--surface); border: 1px solid var(--border);
   border-radius: 8px; padding: 8px 10px; font-size: 12px;
-  box-shadow: 0 4px 14px rgba(0,0,0,0.14); max-width: 280px;
+  box-shadow: var(--shadow); max-width: 280px;
 }
 .tip .v { font-weight: 600; font-size: 14px; color: var(--text-primary); }
 .tip .k { display: inline-block; width: 14px; height: 2px; vertical-align: middle; margin-right: 6px; }
@@ -142,8 +171,10 @@ tfoot td { font-weight: 600; border-top: 2px solid var(--border); border-bottom:
     <button role="tab" data-view="vigilancia" aria-selected="false">Vigilancia de IAAS</button>
   </div>
 
-  <div class="filters" id="filters"></div>
-  <div class="chips" id="chips"></div>
+  <section class="panel" aria-label="Filtros">
+    <div class="filters" id="filters"></div>
+    <div class="chips" id="chips"></div>
+  </section>
   <main id="view"></main>
 </div>
 <div class="tip" id="tip"></div>
