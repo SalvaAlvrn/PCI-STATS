@@ -87,10 +87,16 @@ alguna vez deja de serlo, la construcción falla con un 403 explícito y el
 dashboard **se publica igual**: la pestaña muestra el motivo y la hora del
 intento, y el run queda marcado con un aviso en Actions.
 
-De las once hojas del libro se leen cinco: `CASOS_IAAS` (el caso), `PACIENTES`
-(solo sexo y fecha de nacimiento, para el tramo de edad), `DISPOSITIVOS` (días
-de exposición y bundles), `INVESTIGACIONES` (fechas y enfermedades crónicas) y
-`KOBO_SEGUIMIENTO` (ver más abajo).
+De las trece hojas del libro se leen cinco: `CASOS_IAAS` (el caso),
+`PACIENTES` (solo sexo y fecha de nacimiento, para el tramo de edad),
+`DISPOSITIVOS` (días de exposición y bundles), `INVESTIGACIONES` (fechas y
+enfermedades crónicas) y `Seguimiento Pacientes con IAAS` (ver más abajo).
+
+Ese último nombre está al filo de lo que la portada `htmlview` del libro
+muestra entero —la hoja vecina ya aparece como `Formulario para la
+investiga...`— así que vive en una constante, `HOJA_KOBO`, y no repetido por el
+código. Si en el sistema le ponen un nombre más largo, el índice lo devolverá
+truncado y la descarga dejará de encontrarla.
 
 Las hojas se bajan por `export?format=csv&gid=`, no por la API `gviz/tq`: gviz
 devuelve el libro a medias —81 de 186 casos, sin avisar— y un apartado
@@ -148,7 +154,7 @@ el informe mensual sin copiar cifras a mano de la pantalla.
 
 La migración desde Kobo dejó `FECHA_NOTIFICACION` y `FECHA_INGRESO` vacías en
 101 de los 181 casos migrados; el export crudo del formulario, que vive en la
-hoja `KOBO_SEGUIMIENTO` del mismo libro, sí las tiene todas. `iaas.py` las
+hoja `Seguimiento Pacientes con IAAS` del mismo libro, sí las tiene todas. `iaas.py` las
 rescata emparejando por `KOBO_UUID` y publica el recuento en la tarjeta de
 calidad del registro.
 

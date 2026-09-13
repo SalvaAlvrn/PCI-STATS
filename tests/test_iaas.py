@@ -65,7 +65,7 @@ def libro_falso(casos=None, dispositivos=None, investigaciones=None,
         "DISPOSITIVOS": hoja(dispositivos or [], iaas.HOJAS["DISPOSITIVOS"]),
         "INVESTIGACIONES": hoja(investigaciones or [],
                                 iaas.HOJAS["INVESTIGACIONES"]),
-        "KOBO_SEGUIMIENTO": hoja(kobo or [], iaas.HOJAS["KOBO_SEGUIMIENTO"]),
+        iaas.HOJA_KOBO: hoja(kobo or [], iaas.HOJAS[iaas.HOJA_KOBO]),
     }
 
 

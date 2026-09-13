@@ -33,6 +33,13 @@ class IaasError(Exception):
 ID_LIBRO = "1fpUICeal47RTZeWwpyD_gR21yjgqp26OwHd6D4-YW50"
 TIMEOUT_SEGUNDOS = 60
 
+# El export crudo del formulario de Kobo dentro del libro. Se llamaba
+# «KOBO_SEGUIMIENTO» hasta que Epidemiología le puso el nombre del formulario.
+# El nombre va aquí y no repetido abajo porque anda al filo de lo que la
+# portada `htmlview` muestra entero: nombres más largos salen truncados del
+# índice y `descargar` deja de encontrar la hoja.
+HOJA_KOBO = "Seguimiento Pacientes con IAAS"
+
 # Hoja → columnas sin las que el apartado no se puede construir. Google
 # devuelve la primera hoja del libro cuando el nombre no existe, en lugar de
 # un 404: sin comprobar las cabeceras, un cambio de nombre se leería como una
@@ -58,7 +65,7 @@ HOJAS = {
     ],
     # Export crudo del formulario de Kobo, tal como quedó tras la migración.
     # Solo se usa para rescatar fechas (ver `_rescatar_fechas`).
-    "KOBO_SEGUIMIENTO": ["_uuid", "Fecha de notificación", "Fecha de ingreso"],
+    HOJA_KOBO: ["_uuid", "Fecha de notificación", "Fecha de ingreso"],
 }
 
 # Columnas que existen en el libro y que este módulo no debe publicar jamás.
@@ -360,7 +367,7 @@ def limpiar(libro):
     en una página pública.
     """
     casos, rescatadas = _rescatar_fechas(
-        libro["CASOS_IAAS"], libro["KOBO_SEGUIMIENTO"])
+        libro["CASOS_IAAS"], libro[HOJA_KOBO])
     pacientes = _pacientes(libro["PACIENTES"])
     investigaciones = _investigaciones(libro["INVESTIGACIONES"])
     dispositivos = _dispositivos(libro["DISPOSITIVOS"])
