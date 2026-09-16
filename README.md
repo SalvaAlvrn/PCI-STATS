@@ -147,6 +147,34 @@ La evolución conmuta entre mes y semana. Al filtrar por fechas, la pestaña dic
 cuántos casos quedan fuera por no tener fecha de notificación, en vez de dejar
 que el total baje sin explicación.
 
+### Por qué no hay tasa de incidencia
+
+La pregunta natural —cuántas IAAS por cada 100 ingresos, por mes y por
+servicio— no se puede contestar con este libro. El numerador está completo,
+pero el denominador no existe en ninguna hoja: no hay egresos, días-paciente ni
+número de cirugías. Hasta que Estadística los aporte (bastaría `MES | SERVICIO
+| EGRESOS | DIAS_PACIENTE` y `MES | PROCEDIMIENTO | CIRUGIAS`), la pestaña
+publica dos sustitutos que no son tasas y lo dicen en su subtítulo:
+
+- **Servicios que se salen de su patrón** — qué parte de los casos confirmados
+  del último mes aportó cada servicio, frente a su cuota media en los meses
+  anteriores. Detecta que el reparto se ha movido, no que haya más riesgo: la
+  cuota de un servicio sube también cuando bajan los demás. Sin señal por
+  debajo de 5 casos en el mes o con menos de dos meses previos, y avisa cuando
+  el último mes está en curso.
+- **Tasa de confirmación** — confirmados sobre notificados, por servicio o por
+  procedimiento. Es la única razón del apartado cuyos dos términos salen del
+  libro, y mide la precisión de la sospecha, no la frecuencia de infección.
+  Las categorías con menos de 5 notificados se muestran sin porcentaje.
+
+Las dos dejan fuera `(Sin registrar)`: en procedimiento son los casos que no
+pasaron por quirófano, y encabezarían la tabla como si «no operado» fuese una
+operación. Lo que falta por registrar se cuenta en «Calidad del registro».
+
+La misma cautela rige la densidad de incidencia por dispositivo, que ya estaba:
+su denominador son los días de exposición que las investigaciones registraron,
+no el censo del hospital.
+
 El botón **Descargar CSV** baja exactamente lo que los filtros dejan a la vista,
 con las mismas columnas que la pestaña ya publica —ninguna más—, para escribir
 el informe mensual sin copiar cifras a mano de la pantalla.
@@ -251,6 +279,14 @@ usando el Sheet en vivo la primera vez que hace falta un libro real, así que
 sigue cubriendo el pipeline completo.
 
 Y abrir `tests/test_agg.html` en el navegador para las pruebas de agregación.
+
+`tests/test_vigilancia_js.py` prueba el JavaScript sin navegador: extrae el
+bloque `mod-vigilancia` de `template.html` y lo corre con node, así que cubre
+`cuota` y `confirmacion` —las dos métricas que niegan un número cuando los
+casos no lo sostienen— dentro de la suite normal. Necesita node en el PATH; si
+no está, esas pruebas se marcan `SKIPPED`. Se hizo así y no copiando el módulo
+a un `test_*.html` porque una copia a mano se queda atrás en cuanto alguien
+toca el template.
 
 ## Si el build falla
 

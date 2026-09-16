@@ -562,6 +562,124 @@ function crearVigilancia(vig) {
             otros: orden.map(k => otros[k])};
   }
 
+  // Por debajo de este recuento un porcentaje dice más de lo que sabe: con
+  // tres notificaciones, una confirmación es «33%» y dos son «67%», y entre
+  // las dos cifras no hay ningún cambio real que leer.
+  const MINIMO = 5;
+
+  /** Tasa de confirmación de una dimensión: confirmados sobre notificados.
+   *
+   * No es incidencia —el denominador son los casos que alguien notificó, no
+   * los pacientes atendidos— sino la precisión de la sospecha: cuánto de lo
+   * que un servicio manda a investigar termina siendo IAAS. Es la única razón
+   * del apartado cuyo numerador y denominador salen los dos del libro.
+   */
+  function confirmacion(filas, clave) {
+    const etiquetas = vig.dims[clave];
+    const sinDato = etiquetas.indexOf(E.sin_dato);
+    const acc = new Map();
+    for (const i of filas) {
+      const k = r[clave][i];
+      // «(Sin registrar)» no es una categoría comparable: en procedimiento son
+      // los casos que no pasaron por quirófano —tres de cada cuatro— y
+      // encabezarían la tabla como si «no operado» fuese una operación. Lo que
+      // falta por registrar se cuenta en «Calidad del registro», su sitio.
+      if (k === sinDato) continue;
+      const e = acc.get(k) || {label: etiquetas[k], notificados: 0, confirmados: 0};
+      e.notificados++;
+      if (esConfirmado(i)) e.confirmados++;
+      acc.set(k, e);
+    }
+    const salida = [...acc.values()].map(e => ({
+      ...e,
+      // 0 de 6 es un cero real y se publica; lo que no se publica es el
+      // porcentaje de quien apenas ha notificado.
+      tasa: e.confirmados / e.notificados,
+      suficiente: e.notificados >= MINIMO
+    }));
+    // Las etiquetas escasas van al final: arriba se lee lo que se sostiene.
+    return salida.sort((a, b) => (b.suficiente - a.suficiente) ||
+                                 b.tasa - a.tasa ||
+                                 b.notificados - a.notificados ||
+                                 a.label.localeCompare(b.label, 'es'));
+  }
+
+  /** Cuota de casos confirmados del último mes frente a la de los anteriores.
+   *
+   * Es el sustituto de la tasa de incidencia por servicio mientras no haya
+   * denominador de pacientes: no dice cuántos se infectaron por cada 100
+   * ingresados —eso necesita el censo del hospital, que no está en el libro—
+   * sino cómo se reparten los casos y si ese reparto se ha movido. Un servicio
+   * que pasa del 25% al 75% de los casos del mes es una señal aunque el
+   * hospital entero tenga los mismos casos de siempre.
+   *
+   * Sube la cuota de un servicio también cuando bajan los demás, así que se
+   * lee como aviso para ir a mirar, nunca como medida de riesgo.
+   */
+  function cuota(filas, clave) {
+    const etiquetas = vig.dims[clave];
+    const meses = vig.dims.mes
+      .map((label, k) => ({label, k}))
+      .filter(e => e.label !== E.sin_dato)
+      .sort((a, b) => a.label.localeCompare(b.label));
+    if (meses.length < 2) return [];
+    const ultimo = meses[meses.length - 1];
+    const previos = meses.slice(0, -1);
+
+    // Reparto de los confirmados de cada mes: recuento por etiqueta y total.
+    const reparto = meses.map(() => ({total: 0, por: new Map()}));
+    const posicion = new Map(meses.map((e, orden) => [e.k, orden]));
+    for (const i of confirmados(filas)) {
+      const orden = posicion.get(r.mes[i]);
+      if (orden === undefined) continue;
+      const mes = reparto[orden];
+      mes.total++;
+      mes.por.set(r[clave][i], (mes.por.get(r[clave][i]) || 0) + 1);
+    }
+
+    const hoy = new Date();
+    const mesActual = hoy.getFullYear() + '-' +
+      String(hoy.getMonth() + 1).padStart(2, '0');
+    const enCurso = ultimo.label === mesActual;
+    const ultimoReparto = reparto[reparto.length - 1];
+    // Un servicio que no notificó este mes sigue en la tabla: su caída a cero
+    // es justo lo que hay que ver, y si solo apareciesen los del mes en curso
+    // se leería como que nunca tuvo casos.
+    const vistas = new Set();
+    for (const mes of reparto) for (const k of mes.por.keys()) vistas.add(k);
+    // Fuera «(Sin registrar)»: no es un servicio al que ir a mirar. Sigue
+    // contando en el total del mes, que es el reparto real de los casos.
+    vistas.delete(etiquetas.indexOf(E.sin_dato));
+
+    const salida = [];
+    for (const k of vistas) {
+      const casos = ultimoReparto.por.get(k) || 0;
+      const cuotaMes = ultimoReparto.total ? casos / ultimoReparto.total : null;
+      // Dos meses previos es el mínimo para hablar de «lo habitual»; con uno
+      // solo, la media es ese mes y la comparación no dice nada.
+      const cuotasPrevias = previos
+        .map((_, orden) => reparto[orden])
+        .filter(mes => mes.total)
+        .map(mes => (mes.por.get(k) || 0) / mes.total);
+      const habitual = cuotasPrevias.length >= 2
+        ? cuotasPrevias.reduce((a, b) => a + b, 0) / cuotasPrevias.length
+        : null;
+      const suficiente = casos >= MINIMO;
+      salida.push({
+        label: etiquetas[k], mes: ultimo.label, casos, cuota: cuotaMes, habitual,
+        // Sin recuento que lo sostenga no se publica delta: un servicio que
+        // pasa de 1 caso a 3 «sube 200%» y no ha pasado nada.
+        delta: (habitual !== null && cuotaMes !== null && (suficiente || casos === 0))
+          ? cuotaMes - habitual : null,
+        suficiente, enCurso
+      });
+    }
+    // Lo que más se ha salido de su patrón, arriba: es a lo que se entra.
+    return salida.sort((a, b) => (b.delta ?? -Infinity) - (a.delta ?? -Infinity) ||
+                                 b.casos - a.casos ||
+                                 a.label.localeCompare(b.label, 'es'));
+  }
+
   /** Densidad de incidencia por dispositivo, sobre los días registrados.
    *
    * El denominador son los días de exposición que las investigaciones
@@ -794,7 +912,7 @@ function crearVigilancia(vig) {
 
   return {filasActivas, confirmados, kpis, embudo, porDim, porMulti, porDimCon,
           serie, dispositivos, intervalo, cruce, excluidosPorFecha, variacion,
-          curva, conglomerados, detalleConglomerado};
+          confirmacion, cuota, curva, conglomerados, detalleConglomerado};
 }
 </script>
 <script id="mod-iaas">
@@ -2285,6 +2403,71 @@ const views = (() => {
     contenedor.appendChild(tarjetaRanking(
       'IAAS confirmadas por servicio', 'Servicio donde está el paciente.',
       vigilancia.porDim(conf, 'servicio'), 'Servicio'));
+    // Las dos tarjetas que siguen son lo más parecido a una tasa que permite
+    // el libro, y ninguna lo es: no hay en ninguna hoja el número de
+    // pacientes o de egresos por servicio, que es el denominador que haría
+    // falta. Van juntas y justo debajo del recuento por servicio para que se
+    // lean como lo que son, matices del reparto de casos.
+    const cuotas = vigilancia.cuota(filas, 'servicio');
+    if (cuotas.length) {
+      const senal = e => e.delta === null ? '—'
+        : (e.delta > 0 ? '▲ +' : e.delta < 0 ? '▼ ' : '= ') + charts.pct(Math.abs(e.delta));
+      contenedor.appendChild(tarjetaTabla(
+        'Servicios que se salen de su patrón',
+        `Reparto de los casos confirmados de ${cuotas[0].mes} frente a la ` +
+        'cuota media de los meses anteriores. No es incidencia: el libro no ' +
+        'trae pacientes ni egresos por servicio, así que la cuota sube ' +
+        'también cuando bajan los demás. Sirve para ir a mirar, no para medir ' +
+        'riesgo. Los servicios con menos de 5 casos en el mes no llevan señal.' +
+        (cuotas[0].enCurso ? ' Ojo: el mes va a medias y siempre parece bajo.'
+                           : ''),
+        [{titulo: 'Servicio'},
+         {titulo: 'Casos', num: true, formato: charts.num},
+         {titulo: 'Cuota del mes', num: true, formato: charts.pct},
+         {titulo: 'Habitual', num: true, formato: charts.pct},
+         {titulo: 'Señal', num: true, formato: v => v}],
+        cuotas.map(e => [e.label, e.casos, e.cuota, e.habitual, senal(e)])));
+    }
+
+    const tConf = card(
+      'Tasa de confirmación',
+      'De cada 100 casos notificados, cuántos se confirmaron como IAAS. Mide ' +
+      'la precisión de la sospecha y la carga de investigación, no la ' +
+      'frecuencia de infección. Las filas con menos de 5 notificados van al ' +
+      'final: con tan pocos, el porcentaje salta demasiado para leerlo.');
+    let dimConf = 'servicio';
+    const chipsConf = document.createElement('div');
+    chipsConf.style.margin = '8px 0';
+    tConf.appendChild(chipsConf);
+    const repintarConf = conTabla(tConf,
+      () => [{titulo: dimConf === 'servicio' ? 'Servicio' : 'Procedimiento'},
+             {titulo: 'Notificados', num: true, formato: charts.num},
+             {titulo: 'Confirmados', num: true, formato: charts.num},
+             {titulo: 'Tasa', num: true,
+              formato: v => v === null ? '—' : charts.pct(v)}],
+      () => vigilancia.confirmacion(filas, dimConf)
+        .map(e => [e.label, e.notificados, e.confirmados,
+                   e.suficiente ? e.tasa : null]),
+      zona => {
+        const datos = vigilancia.confirmacion(filas, dimConf)
+          .filter(e => e.suficiente);
+        if (!datos.length) {
+          zona.appendChild(vacio('Ninguna categoría llega a 5 notificados.'));
+          return;
+        }
+        barrasEn(zona, datos, datos.map(e => e.tasa), charts.pct);
+      });
+    [['servicio', 'Por servicio'],
+     ['procedimiento', 'Por procedimiento']].forEach(([valor, texto]) => {
+      const b = document.createElement('button');
+      b.className = 'chip';
+      b.type = 'button';
+      b.textContent = texto;
+      b.addEventListener('click', () => { dimConf = valor; repintarConf(); });
+      chipsConf.appendChild(b);
+    });
+    contenedor.appendChild(tConf);
+
     contenedor.appendChild(tarjetaRanking(
       'IAAS confirmadas por ubicación', 'El segundo nivel del área.',
       vigilancia.porDim(conf, 'ubicacion'), 'Ubicación'));
