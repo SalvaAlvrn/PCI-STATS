@@ -90,13 +90,14 @@ intento, y el run queda marcado con un aviso en Actions.
 De las trece hojas del libro se leen cinco: `CASOS_IAAS` (el caso),
 `PACIENTES` (solo sexo y fecha de nacimiento, para el tramo de edad),
 `DISPOSITIVOS` (días de exposición y bundles), `INVESTIGACIONES` (fechas y
-enfermedades crónicas) y `Seguimiento Pacientes con IAAS` (ver más abajo).
+enfermedades crónicas) y `KOBO_SEGUIMIENTO` (ver más abajo).
 
-Ese último nombre está al filo de lo que la portada `htmlview` del libro
-muestra entero —la hoja vecina ya aparece como `Formulario para la
-investiga...`— así que vive en una constante, `HOJA_KOBO`, y no repetido por el
-código. Si en el sistema le ponen un nombre más largo, el índice lo devolverá
-truncado y la descarga dejará de encontrarla.
+Ese último nombre ya ha cambiado dos veces en el sistema —`KOBO_SEGUIMIENTO`,
+luego el nombre del formulario, `Seguimiento Pacientes con IAAS`, y de vuelta—
+así que vive en una constante, `HOJA_KOBO`, y no repetido por el código: el
+siguiente renombre se arregla en esa línea sola. Cuidado con los nombres
+largos: la portada `htmlview` los trunca —la hoja vecina aparece como
+`Formulario para la investiga...`— y entonces la descarga deja de encontrarla.
 
 Las hojas se bajan por `export?format=csv&gid=`, no por la API `gviz/tq`: gviz
 devuelve el libro a medias —81 de 186 casos, sin avisar— y un apartado
@@ -154,13 +155,15 @@ el informe mensual sin copiar cifras a mano de la pantalla.
 
 La migración desde Kobo dejó `FECHA_NOTIFICACION` y `FECHA_INGRESO` vacías en
 101 de los 181 casos migrados; el export crudo del formulario, que vive en la
-hoja `Seguimiento Pacientes con IAAS` del mismo libro, sí las tiene todas. `iaas.py` las
+hoja `KOBO_SEGUIMIENTO` del mismo libro, sí las tiene todas. `iaas.py` las
 rescata emparejando por `KOBO_UUID` y publica el recuento en la tarjeta de
 calidad del registro.
 
-Es un parche a la vista, no una solución: **lo correcto es rehacer ese tramo de
-la migración en el sistema**. Sin el rescate, un tercio de los casos
-confirmados se quedaría fuera de toda serie temporal.
+Mientras faltaron, sin el rescate un tercio de los casos confirmados se habría
+quedado fuera de toda serie temporal. Epidemiología ya las rellenó en el libro:
+al 2026-09-16 el rescate va a cero y ningún caso queda sin fecha. El parche se
+queda de todos modos —no cuesta nada y es la red por si vuelven a entrar casos
+sin fecha—, pero deja de ser urgente rehacer ese tramo de la migración.
 
 ### Privacidad
 

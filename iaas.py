@@ -33,12 +33,11 @@ class IaasError(Exception):
 ID_LIBRO = "1fpUICeal47RTZeWwpyD_gR21yjgqp26OwHd6D4-YW50"
 TIMEOUT_SEGUNDOS = 60
 
-# El export crudo del formulario de Kobo dentro del libro. Se llamaba
-# «KOBO_SEGUIMIENTO» hasta que Epidemiología le puso el nombre del formulario.
-# El nombre va aquí y no repetido abajo porque anda al filo de lo que la
-# portada `htmlview` muestra entero: nombres más largos salen truncados del
-# índice y `descargar` deja de encontrar la hoja.
-HOJA_KOBO = "Seguimiento Pacientes con IAAS"
+# El export crudo del formulario de Kobo dentro del libro. Epidemiología le ha
+# cambiado el nombre dos veces —«KOBO_SEGUIMIENTO», luego el del formulario,
+# «Seguimiento Pacientes con IAAS», y de vuelta— así que el nombre vive aquí y
+# no repetido abajo: el siguiente renombre se arregla en esta línea sola.
+HOJA_KOBO = "KOBO_SEGUIMIENTO"
 
 # Hoja → columnas sin las que el apartado no se puede construir. Google
 # devuelve la primera hoja del libro cuando el nombre no existe, en lugar de
