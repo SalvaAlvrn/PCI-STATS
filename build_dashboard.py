@@ -559,7 +559,16 @@ def main(argv=None):
 
     # Vigilancia de IAAS: el sistema de Epidemiología en Google Sheets.
     try:
-        casos = vigilancia.construir()
+        # El personal que investigó se identifica contra los responsables de
+        # supervisión: es la única lista de nombres completos ya revisada.
+        casos, sin_identificar = vigilancia.construir(
+            nombres=sorted(limpio["RESPONSABLE"].unique()))
+        # No lleva «AVISO:»: el workflow lo leería como que la pestaña no se
+        # construyó, y sí se construyó.
+        if sin_identificar:
+            print(f"Vigilancia: {len(sin_identificar)} nombre(s) de "
+                  "PERSONAL_PCI no corresponden a ningún responsable y salen "
+                  f"como «{vigilancia.SIN_IDENTIFICAR}»: {sin_identificar}")
         print(f"Vigilancia: {casos['meta']['casos']} casos, "
               f"{casos['meta']['confirmados']} confirmados, "
               f"{casos['meta']['pacientes']} pacientes distintos")

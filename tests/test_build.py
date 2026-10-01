@@ -589,7 +589,7 @@ def test_el_html_generado_no_contiene_datos_de_paciente(tmp_path):
     from test_iaas import PACIENTE, libro_falso
 
     with patch("iaas.descargar", return_value=libro_falso()):
-        bloque = iaas.construir()
+        bloque, _ = iaas.construir()
     plantilla = tmp_path / "t.html"
     plantilla.write_text("<html>/*__DATA__*/ /*__CHARTJS__*/</html>", "utf-8")
     vendor = tmp_path / "chart.js"

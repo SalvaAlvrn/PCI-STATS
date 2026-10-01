@@ -229,7 +229,7 @@ const store = (() => {
 const storeVig = (() => {
   const filters = {desde: null, hasta: null, definicion: null, servicio: null,
                    ubicacion: null, diagnostico: null, origen: null,
-                   microorganismo: null, dispositivo: null};
+                   microorganismo: null, dispositivo: null, personal: null};
   const oyentes = [];
   function set(clave, valor) { filters[clave] = valor; emit(); }
   function clear(clave) { filters[clave] = null; emit(); }
@@ -423,7 +423,7 @@ function crearVigilancia(vig) {
   const SIMPLES = ['definicion', 'servicio', 'ubicacion', 'diagnostico',
                    'origen', 'condicion', 'sexo'];
   // Dimensiones de varios valores por caso; viajan como matriz etiqueta×caso.
-  const MATRICES = ['microorganismo', 'dispositivo', 'causa'];
+  const MATRICES = ['microorganismo', 'dispositivo', 'causa', 'personal'];
 
   /** ¿Pasa el caso los filtros que no son de fecha? */
   function pasaDimensiones(f, i) {
@@ -2093,7 +2093,8 @@ const views = (() => {
     ['condicion', 'Condición'], ['vigepes', 'VIGEPES-08'],
     ['sexo', 'Sexo'], ['edad', 'Edad'],
     ['microorganismo', 'Microorganismos'], ['dispositivo', 'Dispositivos'],
-    ['causa', 'Causa raíz'], ['deteccion', 'Días ingreso-notificación'],
+    ['causa', 'Causa raíz'], ['personal', 'Personal PCI'],
+    ['deteccion', 'Días ingreso-notificación'],
     ['a_investigacion', 'Días notificación-investigación'],
     ['a_vigepes', 'Días notificación-VIGEPES']
   ];
@@ -2916,11 +2917,11 @@ const app = (() => {
       store: () => storeVig,
       datos: () => DATA.vigilancia,
       filtros: ['definicion', 'servicio', 'ubicacion', 'diagnostico', 'origen',
-                'microorganismo', 'dispositivo'],
+                'microorganismo', 'dispositivo', 'personal'],
       etiquetas: {definicion: 'Definición', servicio: 'Servicio',
                   ubicacion: 'Ubicación', diagnostico: 'Diagnóstico',
                   origen: 'Origen', microorganismo: 'Microorganismo',
-                  dispositivo: 'Dispositivo'},
+                  dispositivo: 'Dispositivo', personal: 'Personal PCI'},
       opciones: clave => DATA.vigilancia.dims[clave]
     }
   };

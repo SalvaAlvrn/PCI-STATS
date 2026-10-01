@@ -17,6 +17,7 @@ se cuela.
 
 import io
 import re
+import unicodedata
 
 import pandas as pd
 import requests
@@ -60,7 +61,7 @@ HOJAS = {
     ],
     "INVESTIGACIONES": [
         "ID_CASO", "FECHA_INVESTIGACION", "FECHA_CIERRE",
-        "ENFERMEDADES_CRONICAS",
+        "ENFERMEDADES_CRONICAS", "PERSONAL_PCI",
     ],
     # Export crudo del formulario de Kobo, tal como quedó tras la migración.
     # Solo se usa para rescatar fechas (ver `_rescatar_fechas`).
@@ -74,7 +75,7 @@ CAMPOS_PROHIBIDOS = [
     "NOMBRE_PACIENTE", "NOMBRE", "EXPEDIENTE", "FECHA_NACIMIENTO", "CAMA",
     "OBSERVACIONES", "DIAGNOSTICO_CIE10", "ID_PACIENTE", "ID_CASO",
     "CORRELATIVO", "KOBO_UUID", "RESPONSABLE_CIRUGIA", "RESPONSABLE_COLOCACION",
-    "RESPONSABLE_CUIDADO", "MEDICO_TRATANTE", "PERSONAL_PCI", "MEDICAMENTOS",
+    "RESPONSABLE_CUIDADO", "MEDICO_TRATANTE", "MEDICAMENTOS",
     "DIAGNOSTICO_IAAS_OTRO", "MICROORGANISMO_OTRO", "LUGAR_ORIGEN_EXTRA",
 ]
 
@@ -86,6 +87,10 @@ NO_IAAS = "No IAAS"
 DEFINICIONES = [CONFIRMADO, SOSPECHOSO, NO_IAAS]
 
 SIN_DATO = "(Sin registrar)"
+# Personal escrito en la investigación que no corresponde a nadie de la lista
+# de PCI: «PERSONAL DE PCI», un nombre nuevo, una frase. Se cuenta aparte en
+# lugar de publicarse tal cual, que sería sacar texto libre a la página.
+SIN_IDENTIFICAR = "(Sin identificar)"
 # Fila de prueba que el equipo dejó en el libro. Se compara el nombre completo
 # —no «contiene TEST»— para no tirar un caso real cuyo texto lo mencione.
 PACIENTE_PRUEBA = "TEST"
@@ -314,13 +319,18 @@ def _investigaciones(tabla):
     """ID de caso → datos de su investigación más temprana.
 
     Un caso puede tener varias: la que cuenta para medir la oportunidad es la
-    primera, que es cuando PCI llegó a él.
+    primera, que es cuando PCI llegó a él. El personal, en cambio, se junta de
+    todas: quien hizo la segunda también trabajó el caso.
     """
     salida = {}
+    personal = {}
     for _, fila in tabla.iterrows():
         clave = texto(fila["ID_CASO"])
         if not clave:
             continue
+        crudo = texto(fila["PERSONAL_PCI"])
+        if crudo:
+            personal.setdefault(clave, []).append(crudo)
         inicio = fecha(fila["FECHA_INVESTIGACION"])
         actual = salida.get(clave)
         if actual and actual["inicio"] and inicio and actual["inicio"] <= inicio:
@@ -330,7 +340,94 @@ def _investigaciones(tabla):
             "cierre": fecha(fila["FECHA_CIERRE"]),
             "cronicas": multi(fila["ENFERMEDADES_CRONICAS"]),
         }
+    for clave, textos in personal.items():
+        salida[clave]["personal"] = textos
     return salida
+
+
+# ---------------------------------------------------------------------------
+# Personal de PCI
+# ---------------------------------------------------------------------------
+#
+# `PERSONAL_PCI` es texto libre: la misma persona aparece con título y sin él,
+# en mayúsculas, con un apellido de casada, abreviada o con una errata, y a
+# veces son dos personas en la misma celda. No se publica tal cual: cada trozo
+# se empareja con la lista de nombres completos del personal de PCI —la de los
+# responsables de supervisión— y solo sale el nombre de esa lista.
+
+# Lo que no distingue a nadie: títulos, partículas y conectores.
+_PALABRAS_VACIAS = {
+    "lic", "licda", "licdo", "licenciada", "licenciado", "dr", "dra", "enf",
+    "ing", "de", "del", "la", "las", "los",
+}
+
+
+def _palabras(valor):
+    """Palabras comparables: sin acentos, sin títulos, en minúsculas."""
+    plano = unicodedata.normalize("NFKD", valor)
+    plano = "".join(c for c in plano if not unicodedata.combining(c)).lower()
+    return [p for p in re.findall(r"[a-z]+", plano)
+            if len(p) > 1 and p not in _PALABRAS_VACIAS]
+
+
+def _parecidas(a, b):
+    """Iguales, o a una errata de distancia si las dos son largas.
+
+    «Yessica»/«Yesica» y «Pacheci»/«Pacheco» son la misma persona; en
+    palabras cortas una letra ya cambia de nombre, así que ahí no se perdona.
+    """
+    if a == b:
+        return True
+    if min(len(a), len(b)) < 5 or abs(len(a) - len(b)) > 1:
+        return False
+    if len(a) > len(b):
+        a, b = b, a
+    i = j = errores = 0
+    while i < len(a) and j < len(b):
+        if a[i] == b[j]:
+            i += 1
+            j += 1
+            continue
+        errores += 1
+        if errores > 1:
+            return False
+        if len(a) == len(b):
+            i += 1
+        j += 1
+    return errores + (len(b) - j) <= 1
+
+
+def identificar_personal(crudo, nombres):
+    """(nombres de la lista que aparecen en `crudo`, trozos sin identificar).
+
+    Cada trozo va a la persona con la que comparte más palabras, siempre que
+    sea una sola y que esas palabras sean al menos la mitad del trozo. Un
+    empate o un parecido de una palabra entre muchas no se adivina: queda sin
+    identificar y el build lo avisa.
+    """
+    # Lo que viene tras «modificado» es quién editó el registro, no quién
+    # investigó.
+    crudo = re.split(r"(?i)\bmodificad[oa]\b", crudo)[0]
+    candidatos = [(nombre, _palabras(nombre)) for nombre in nombres]
+    encontrados, sueltos = [], []
+    for trozo in re.split(r"[,;/]|\s+y\s+|\s+e\s+", crudo):
+        palabras = _palabras(trozo)
+        if not palabras:
+            if texto(trozo):
+                sueltos.append(texto(trozo))
+            continue
+        puntos = sorted(
+            ((sum(any(_parecidas(p, q) for q in suyas) for p in palabras), nombre)
+             for nombre, suyas in candidatos),
+            reverse=True)
+        mejor = puntos[0][0] if puntos else 0
+        empate = len(puntos) > 1 and puntos[1][0] == mejor
+        if mejor and not empate and mejor * 2 >= len(palabras):
+            if puntos[0][1] not in encontrados:
+                encontrados.append(puntos[0][1])
+        else:
+            sueltos.append(texto(trozo))
+    return encontrados, sueltos
 
 
 def _dispositivos(tabla):
@@ -358,12 +455,13 @@ def _dispositivos(tabla):
     return salida
 
 
-def limpiar(libro):
+def limpiar(libro, nombres=()):
     """Una fila por caso vigilable. Solo salen las columnas de la lista blanca.
 
     Lo que no está aquí no se copia: una columna nueva en el sistema no se
     publica por descuido, que es el comportamiento que hace falta por defecto
-    en una página pública.
+    en una página pública. `nombres` es la lista del personal de PCI contra la
+    que se identifica a quien investigó cada caso.
     """
     casos, rescatadas = _rescatar_fechas(
         libro["CASOS_IAAS"], libro[HOJA_KOBO])
@@ -374,6 +472,7 @@ def limpiar(libro):
     filas = []
     descartados = 0
     personas = set()
+    sin_identificar = set()
     for _, caso in casos.iterrows():
         if texto(caso["ARCHIVADO"]).upper() == "TRUE":
             descartados += 1
@@ -389,6 +488,13 @@ def limpiar(libro):
         nacimiento, sexo = pacientes.get(id_paciente, (None, SIN_DATO))
         if id_paciente:
             personas.add(id_paciente)
+        personal = []
+        for crudo in investigacion.get("personal", []):
+            encontrados, sueltos = identificar_personal(crudo, nombres)
+            personal += [n for n in encontrados if n not in personal]
+            sin_identificar.update(sueltos)
+            if sueltos and SIN_IDENTIFICAR not in personal:
+                personal.append(SIN_IDENTIFICAR)
 
         filas.append({
             "dia": _dia(notificacion),
@@ -408,6 +514,7 @@ def limpiar(libro):
             "microorganismos": multi(caso["MICROORGANISMO_RESUMEN"]),
             "causas": multi(caso["CAUSA_RAIZ"]),
             "cronicas": investigacion.get("cronicas", []),
+            "personal": personal,
             "dispositivos": dispositivos.get(clave, []),
             "investigado": bool(investigacion),
             "cerrado": investigacion.get("cierre") is not None,
@@ -418,7 +525,8 @@ def limpiar(libro):
             "a_vigepes": _entre(notificacion, fecha(caso["FECHA_VIGEPES_08"])),
         })
     return filas, {"descartados": descartados, "personas": len(personas),
-                   "fechas_rescatadas": rescatadas}
+                   "fechas_rescatadas": rescatadas,
+                   "sin_identificar": sorted(sin_identificar)}
 
 
 # ---------------------------------------------------------------------------
@@ -438,6 +546,7 @@ MULTIPLES = {
     "microorganismo": "microorganismos",
     "causa": "causas",
     "cronica": "cronicas",
+    "personal": "personal",
 }
 
 
@@ -463,10 +572,15 @@ def _categorico(valores):
     return categorias, [indice[v] for v in valores]
 
 
-def construir(libro=ID_LIBRO):
-    """Descarga, valida, limpia y codifica. Devuelve el bloque DATA.iaas."""
+def construir(libro=ID_LIBRO, nombres=()):
+    """Descarga, valida, limpia y codifica.
+
+    Devuelve (bloque DATA.vigilancia, trozos de personal sin identificar). Los
+    trozos van aparte porque son texto libre: sirven para avisar en el build,
+    no para publicarse.
+    """
     hojas = validar(descargar(libro))
-    filas, extra = limpiar(hojas)
+    filas, extra = limpiar(hojas, nombres)
 
     # Casos que existen y ninguno con definición conocida significa que la
     # lista de opciones cambió, no que no haya habido IAAS: el campo es
@@ -534,7 +648,7 @@ def construir(libro=ID_LIBRO):
     dias = [f["dia"] for f in filas if f["dia"] is not None]
     confirmados = sum(1 for f in filas if f["definicion"] == CONFIRMADO)
 
-    return {
+    bloque = {
         "ok": True,
         "dims": dims,
         "rows": rows,
@@ -544,6 +658,7 @@ def construir(libro=ID_LIBRO):
             "no_iaas": NO_IAAS,
             "sin_dato": SIN_DATO,
             "invasivos": DISPOSITIVOS_INVASIVOS,
+            "sin_identificar": SIN_IDENTIFICAR,
         },
         "meta": {
             "generado": pd.Timestamp.now(tz="UTC").strftime("%Y-%m-%d %H:%M UTC"),
@@ -557,3 +672,4 @@ def construir(libro=ID_LIBRO):
             "dia_max": max(dias) if dias else 0,
         },
     }
+    return bloque, extra["sin_identificar"]

@@ -69,9 +69,9 @@ def libro_falso(casos=None, dispositivos=None, investigaciones=None,
     }
 
 
-def construir(**kwargs):
+def construir(nombres=(), **kwargs):
     with patch("iaas.descargar", return_value=libro_falso(**kwargs)):
-        return iaas.construir()
+        return iaas.construir(nombres=nombres)[0]
 
 
 # --- forma de la fuente ----------------------------------------------------
@@ -217,6 +217,66 @@ def test_los_intervalos_del_proceso_salen_en_dias():
     assert data["rows"]["investigado"] == [1]
     assert data["rows"]["cerrado"] == [1]
     assert data["dims"]["cronica"] == ["Cáncer", "Diabetes"]
+
+
+# --- personal de PCI -------------------------------------------------------
+
+# Nombres inventados: el repositorio es público.
+PERSONAL = ["Ana Lucía Rivas Peña", "Berta Sofía Molina Cruz",
+            "Carlos Andrés Rivas López", "Yesica Bezai Torres Dolores"]
+
+
+@pytest.mark.parametrize("crudo,esperado", [
+    ("ANA LUCÍA RIVAS PEÑA", ["Ana Lucía Rivas Peña"]),
+    ("Licda. Ana Rivas", ["Ana Lucía Rivas Peña"]),
+    # Errata de una letra en una palabra larga.
+    ("LIC. ANA LUCIA RIVAS PEÑI", ["Ana Lucía Rivas Peña"]),
+    ("Lic. Yessica", ["Yesica Bezai Torres Dolores"]),
+    # Apellido de casada: tres de cuatro palabras coinciden.
+    ("Yesica Bezai Torres de Bermúdez", ["Yesica Bezai Torres Dolores"]),
+    ("Berta Molina, Lic. Carlos Rivas", ["Berta Sofía Molina Cruz",
+                                         "Carlos Andrés Rivas López"]),
+    ("Berta Sofía Molina y Licda Ana Lucía Rivas", ["Berta Sofía Molina Cruz",
+                                                     "Ana Lucía Rivas Peña"]),
+    # Quien modificó el registro no investigó.
+    ("Berta Molina y modificado 16/08/2026 por ANA RIVAS",
+     ["Berta Sofía Molina Cruz"]),
+])
+def test_identificar_personal_unifica_las_formas_de_escribir_un_nombre(
+        crudo, esperado):
+    encontrados, sueltos = iaas.identificar_personal(crudo, PERSONAL)
+    assert encontrados == esperado
+    assert sueltos == []
+
+
+@pytest.mark.parametrize("crudo", [
+    "PERSONAL DE PCI",
+    # «Rivas» es de dos personas: no se adivina cuál.
+    "Lic. Rivas",
+    "Zoila Rosa Méndez",
+])
+def test_identificar_personal_no_adivina(crudo):
+    encontrados, sueltos = iaas.identificar_personal(crudo, PERSONAL)
+    assert encontrados == []
+    assert sueltos
+
+
+def test_el_personal_de_todas_las_investigaciones_del_caso_viaja_como_matriz():
+    investigaciones = [
+        {"ID_CASO": "C1", "FECHA_INVESTIGACION": "07/06/2026",
+         "PERSONAL_PCI": "Licda. Ana Rivas"},
+        {"ID_CASO": "C1", "FECHA_INVESTIGACION": "09/06/2026",
+         "PERSONAL_PCI": "BERTA MOLINA, PERSONAL DE PCI"},
+    ]
+    with patch("iaas.descargar",
+               return_value=libro_falso(investigaciones=investigaciones)):
+        data, sin_identificar = iaas.construir(nombres=PERSONAL)
+    assert data["dims"]["personal"] == [
+        iaas.SIN_IDENTIFICAR, "Ana Lucía Rivas Peña", "Berta Sofía Molina Cruz"]
+    assert [fila[0] for fila in data["rows"]["personal"]] == [1, 1, 1]
+    # El texto libre no se publica: solo vuelve para el aviso del build.
+    assert sin_identificar == ["PERSONAL DE PCI"]
+    assert "PERSONAL DE PCI" not in str(data)
 
 
 def test_una_fecha_posterior_al_hito_no_produce_un_intervalo_negativo():

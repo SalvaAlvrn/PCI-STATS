@@ -196,11 +196,24 @@ sin fecha—, pero deja de ser urgente rehacer ese tramo de la migración.
 ### Privacidad
 
 Del libro solo se publican las columnas de la lista blanca de `iaas.py`. Nombre
-del paciente, expediente, cama, diagnóstico CIE-10, observaciones, responsable
-de la cirugía y personal de PCI no salen del proceso de construcción: lo que no
-está declarado no se copia, así que una columna nueva en el sistema no se
-filtra por descuido. Dos pruebas lo comprueban, una sobre el bloque de datos y
-otra sobre el HTML ya renderizado.
+del paciente, expediente, cama, diagnóstico CIE-10, observaciones y responsable
+de la cirugía no salen del proceso de construcción: lo que no está declarado no
+se copia, así que una columna nueva en el sistema no se filtra por descuido.
+Dos pruebas lo comprueban, una sobre el bloque de datos y otra sobre el HTML ya
+renderizado.
+
+El **personal de PCI** que investigó cada caso sí se publica, con nombre
+completo, para poder filtrar por él («Personal PCI»). Pero `PERSONAL_PCI` es
+texto libre —títulos, mayúsculas, apellidos de casada, erratas, dos personas en
+una celda—, así que no sale tal cual: cada trozo se empareja con la lista de
+responsables de supervisión y solo se publica el nombre de esa lista. Se juntan
+las personas de todas las investigaciones del caso. Lo que no se puede atribuir
+a una sola persona sin adivinar sale como `(Sin identificar)`, y el build
+imprime esos trozos para que se corrijan en el libro o se añada a la persona.
+
+Quién confirmó, descartó o cerró un caso no se puede saber: `HISTORIAL` y
+`SEGUIMIENTOS` registran la cuenta compartida «Usuario institucional», no la
+persona.
 
 La fecha de nacimiento no se publica: solo el tramo de edad. Los pacientes
 distintos se muestran como un total del periodo y no como un KPI que responda a

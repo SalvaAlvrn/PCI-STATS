@@ -83,7 +83,7 @@ def dataset(casos, meses):
             "vigepes": [SIN_DATO], "edad": [SIN_DATO], "fuente": [SIN_DATO],
             "herida": [SIN_DATO], "intervencion": [SIN_DATO],
             "semana": [SIN_DATO],
-            "microorganismo": [], "dispositivo": [], "causa": [], "cronica": [],
+            "microorganismo": [], "dispositivo": [], "causa": [], "cronica": [], "personal": [],
         },
         "rows": {
             "servicio": [indice(servicios, c[0]) for c in casos],
@@ -94,7 +94,7 @@ def dataset(casos, meses):
             "condicion": [0] * n, "sexo": [0] * n, "vigepes": [0] * n,
             "edad": [0] * n, "fuente": [0] * n, "herida": [0] * n,
             "intervencion": [0] * n, "semana": [0] * n,
-            "microorganismo": [], "dispositivo": [], "causa": [], "cronica": [],
+            "microorganismo": [], "dispositivo": [], "causa": [], "cronica": [], "personal": [],
             "dispositivo_dias": [], "bundle_si": [], "bundle_no": [],
             "dia": [None] * n,
             "investigado": [0] * n, "cerrado": [0] * n,
