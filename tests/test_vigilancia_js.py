@@ -330,3 +330,59 @@ def test_cuota_ordena_por_delta_descendente():
     salida = ejecutar(_tres_meses(), f"v.cuota({TODAS}, 'servicio')")
     assert [e["label"] for e in salida][0] == "Medicina Interna"
     assert [e["label"] for e in salida][-1] == "Cirugía"
+
+
+# ---------------------------------------------------------------------------
+# Filtros apilados: varios valores de una dimensión se suman
+# ---------------------------------------------------------------------------
+
+SIN_FILTROS = ("{desde: null, hasta: null, definicion: null, servicio: null, "
+               "ubicacion: null, diagnostico: null, origen: null, "
+               "microorganismo: null, dispositivo: null, personal: null}")
+
+
+def test_varios_servicios_suman_sus_casos():
+    datos = dataset([caso("UCI"), caso("Cirugía"), caso("Cirugía"),
+                     caso("Emergencia")], ["2026-08"])
+    # Servicios en orden alfabético: Cirugía=0, Emergencia=1, UCI=2.
+    salida = ejecutar(
+        datos, f"v.filasActivas({{...{SIN_FILTROS}, servicio: [0, 2]}})")
+    assert salida == [0, 1, 2]
+
+
+def test_valores_de_dimensiones_distintas_se_cruzan():
+    datos = dataset([caso("UCI"), caso("UCI", SOSPECHOSO),
+                     caso("Cirugía", SOSPECHOSO)], ["2026-08"])
+    # Definiciones: CONFIRMADO=0, SOSPECHOSO=1. Servicios: Cirugía=0, UCI=1.
+    salida = ejecutar(
+        datos,
+        f"v.filasActivas({{...{SIN_FILTROS}, servicio: [1], definicion: [1]}})")
+    assert salida == [1]
+
+
+def test_varios_valores_de_una_matriz_pasan_con_cualquiera():
+    datos = dataset([caso("UCI"), caso("UCI"), caso("UCI")], ["2026-08"])
+    datos["dims"]["microorganismo"] = ["E. coli", "Klebsiella"]
+    datos["rows"]["microorganismo"] = [[1, 0, 0], [0, 1, 0]]
+    salida = ejecutar(
+        datos, f"v.filasActivas({{...{SIN_FILTROS}, microorganismo: [0, 1]}})")
+    assert salida == [0, 1]
+
+
+def test_store_global_suma_ubicaciones_y_las_cruza_con_la_unidad():
+    """El filtro de ubicación física del Global admite varias a la vez."""
+    guion = (
+        "const DATA = {rows: {cumple: [1, 1, 1, 1], dia: [0, 0, 0, 0],"
+        " medida: [0, 0, 0, 0], submedida: [0, 0, 0, 0],"
+        " unidad: [0, 0, 1, 1], area: [0, 1, 2, 0],"
+        " grupo: [0, 0, 0, 0], cargo: [0, 0, 0, 0], estado: [0, 0, 0, 0]}};\n"
+        f"{_modulo('mod-store')}\n"
+        "const salida = [];\n"
+        "store.set('area', [0, 2]); salida.push(store.activeRows());\n"
+        "store.set('unidad', [1]); salida.push(store.activeRows());\n"
+        "console.log(JSON.stringify(salida));\n"
+    )
+    resultado = subprocess.run(
+        ["node", "-e", guion], capture_output=True, text=True, encoding="utf-8")
+    assert resultado.returncode == 0, resultado.stderr
+    assert json.loads(resultado.stdout) == [[0, 2, 3], [2, 3]]

@@ -128,6 +128,42 @@ tfoot td { font-weight: 600; border-top: 2px solid var(--border); border-bottom:
   font: inherit; font-size: 13px; padding: 5px 8px; border-radius: 7px;
   border: 1px solid var(--border); background: var(--surface); color: var(--text-primary);
 }
+/* Selector múltiple: un <details> con casillas, porque <select multiple>
+   obliga a Ctrl+clic y nadie lo descubre solo. */
+.filters .campo { display: flex; flex-direction: column; font-size: 12px; color: var(--text-secondary); gap: 3px; }
+.multi { position: relative; }
+.multi summary {
+  list-style: none; cursor: pointer; font-size: 13px; padding: 5px 26px 5px 8px;
+  border-radius: 7px; border: 1px solid var(--border); background: var(--surface);
+  color: var(--text-primary); min-width: 120px; max-width: 220px;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; position: relative;
+}
+.multi summary::-webkit-details-marker { display: none; }
+.multi summary::after {
+  content: "▾"; position: absolute; right: 8px; top: 50%; transform: translateY(-50%);
+  color: var(--text-secondary);
+}
+.multi.activo summary { border-color: var(--series-1); box-shadow: inset 0 0 0 1px var(--series-1); }
+.multi-panel {
+  position: absolute; z-index: 30; top: calc(100% + 4px); left: 0;
+  width: max-content; min-width: 100%; max-width: min(360px, 90vw);
+  background: var(--surface); border: 1px solid var(--border); border-radius: 8px;
+  box-shadow: var(--shadow); padding: 8px; color: var(--text-primary);
+}
+.multi-panel input[type=search] { width: 100%; }
+.multi-acciones { display: flex; justify-content: flex-end; margin: 6px 0 4px; }
+.multi-acciones button {
+  font: inherit; font-size: 12px; background: none; border: 0; padding: 0;
+  color: var(--series-1); cursor: pointer;
+}
+.multi-lista { max-height: 260px; overflow-y: auto; }
+.multi-lista label {
+  display: flex; flex-direction: row; align-items: flex-start; gap: 6px;
+  font-size: 13px; color: var(--text-primary); padding: 3px 2px; cursor: pointer;
+}
+.multi-lista label:hover { background: color-mix(in srgb, var(--series-1) 10%, var(--surface)); }
+.multi-lista input { margin-top: 3px; padding: 0; }
+.multi-vacio { color: var(--text-muted); font-size: 12px; padding: 6px 2px; }
 .chips { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 16px; }
 .chip {
   font-size: 12px; padding: 3px 8px; border-radius: 999px;
@@ -182,9 +218,20 @@ tfoot td { font-weight: 600; border-top: 2px solid var(--border); border-bottom:
 <script>/*__CHARTJS__*/</script>
 <script>const DATA = /*__DATA__*/;</script>
 <script id="mod-store">
+/** Cada filtro de dimensión es null (todos) o una lista de índices.
+ *
+ * Dentro de una dimensión los valores se suman —dos ubicaciones son las filas
+ * de una más las de la otra—; entre dimensiones se cruzan, como siempre.
+ */
+function enLista(lista, valor) {
+  return lista === null || lista.includes(valor);
+}
+
 const store = (() => {
+  // `area` es la ubicación física: el segundo nivel de la unidad, que el
+  // formulario pregunta en un desplegable dependiente.
   const DIMS_FILTRABLES = [
-    'medida', 'submedida', 'unidad', 'grupo', 'cargo', 'estado'
+    'medida', 'submedida', 'unidad', 'area', 'grupo', 'cargo', 'estado'
   ];
   const filters = {desde: null, hasta: null};
   DIMS_FILTRABLES.forEach(k => { filters[k] = null; });
@@ -200,7 +247,7 @@ const store = (() => {
       if (filters.hasta !== null && r.dia[i] > filters.hasta) continue;
       let pasa = true;
       for (const k of DIMS_FILTRABLES) {
-        if (filters[k] !== null && r[k][i] !== filters[k]) { pasa = false; break; }
+        if (!enLista(filters[k], r[k][i])) { pasa = false; break; }
       }
       if (pasa) out.push(i);
     }
@@ -249,8 +296,11 @@ const storeVig = (() => {
  * mezclarlas dejaría selectores muertos en las dos vistas.
  */
 const storeIaas = (() => {
+  // `unidad` y `subservicio` son del formulario de casos: solo filtran las
+  // tarjetas de casos confirmados.
   const filters = {desde: null, hasta: null, responsable: null,
-                   servicio: null, actividad: null};
+                   servicio: null, actividad: null,
+                   unidad: null, subservicio: null};
   const oyentes = [];
   function set(clave, valor) { filters[clave] = valor; emit(); }
   function clear(clave) { filters[clave] = null; emit(); }
@@ -428,10 +478,11 @@ function crearVigilancia(vig) {
   /** ¿Pasa el caso los filtros que no son de fecha? */
   function pasaDimensiones(f, i) {
     for (const clave of SIMPLES) {
-      if (f[clave] != null && r[clave][i] !== f[clave]) return false;
+      if (f[clave] != null && !f[clave].includes(r[clave][i])) return false;
     }
+    // Varios valores de una matriz se suman: pasa el caso que tenga cualquiera.
     for (const clave of MATRICES) {
-      if (f[clave] != null && r[clave][f[clave]][i] !== 1) return false;
+      if (f[clave] != null && !f[clave].some(k => r[clave][k][i] === 1)) return false;
     }
     return true;
   }
@@ -932,9 +983,11 @@ function crearIaas(iaas) {
     for (let i = 0; i < n; i++) {
       if (f.desde !== null && r.dia[i] < f.desde) continue;
       if (f.hasta !== null && r.dia[i] > f.hasta) continue;
-      if (f.responsable !== null && r.responsable[i] !== f.responsable) continue;
-      if (f.servicio !== null && r.servicio[i] !== f.servicio) continue;
-      if (f.actividad !== null && r.actividades[f.actividad][i] !== 1) continue;
+      if (!enLista(f.responsable, r.responsable[i])) continue;
+      if (!enLista(f.servicio, r.servicio[i])) continue;
+      // Varias actividades se suman: pasa el envío que declare cualquiera.
+      if (f.actividad !== null &&
+          !f.actividad.some(a => r.actividades[a][i] === 1)) continue;
       out.push(i);
     }
     return out;
@@ -1787,6 +1840,8 @@ const views = (() => {
     for (let i = 0; i < r.dia.length; i++) {
       if (f.desde !== null && r.dia[i] < f.desde) continue;
       if (f.hasta !== null && r.dia[i] > f.hasta) continue;
+      if (!enLista(f.unidad, r.unidad[i])) continue;
+      if (!enLista(f.subservicio, r.subservicio[i])) continue;
       total++;
       const k = r[clave][i];
       cuenta.set(k, (cuenta.get(k) || 0) + 1);
@@ -1848,12 +1903,13 @@ const views = (() => {
     nota.className = 'sub';
     nota.style.marginBottom = '16px';
     nota.textContent = 'Casos con «Definición de caso: Confirmado», por la ' +
-      'ubicación del paciente. Solo el rango de fechas filtra estas tarjetas: ' +
-      'responsable, servicio y actividad son del formulario de producción.';
+      'ubicación del paciente. Estas tarjetas las filtran el rango de fechas, ' +
+      'la unidad y el subservicio; responsable, servicio y actividad son del ' +
+      'formulario de producción y no las tocan.';
     contenedor.appendChild(nota);
 
     if (!unidades.total) {
-      contenedor.appendChild(vacio('Sin casos confirmados en este rango de fechas.'));
+      contenedor.appendChild(vacio('Sin casos confirmados para estos filtros.'));
       return;
     }
     contenedor.appendChild(tarjetaCasos(
@@ -2851,188 +2907,256 @@ const app = (() => {
   const barra = document.getElementById('filters');
   const zonaChips = document.getElementById('chips');
 
-  const ETIQUETAS = {
-    medida: 'Medida', submedida: 'Submedida', unidad: 'Unidad / servicio',
-    grupo: 'Grupo ocupacional', cargo: 'Cargo', estado: 'Estado de validación'
-  };
   const DIA_MS = 86400000;
   const aISO = dia => new Date(dia * DIA_MS).toISOString().slice(0, 10);
   const aDia = iso => Math.floor(Date.parse(iso) / DIA_MS);
 
-  function selector(clave) {
-    const label = document.createElement('label');
-    label.textContent = ETIQUETAS[clave];
-    const sel = document.createElement('select');
-    const todos = document.createElement('option');
-    todos.value = '';
-    todos.textContent = 'Todos';
-    sel.appendChild(todos);
-    DATA.dims[clave].forEach((valor, i) => {
-      const op = document.createElement('option');
-      op.value = String(i);
-      op.textContent = valor;   // valor del Excel: textContent, no innerHTML
-      sel.appendChild(op);
-    });
-    sel.addEventListener('change', () => {
-      store.set(clave, sel.value === '' ? null : Number(sel.value));
-    });
-    sel.dataset.clave = clave;
-    label.appendChild(sel);
-    return label;
-  }
-
-  function fecha(clave, texto) {
-    const label = document.createElement('label');
-    label.textContent = texto;
-    const input = document.createElement('input');
-    input.type = 'date';
-    input.min = aISO(DATA.meta.dia_min);
-    input.max = aISO(DATA.meta.dia_max);
-    input.addEventListener('change', () => {
-      store.set(clave, input.value ? aDia(input.value) : null);
-    });
-    input.dataset.clave = clave;
-    label.appendChild(input);
-    return label;
-  }
-
-  /** Las pestañas con fuente propia: store, datos y dimensiones filtrables.
+  /** Cada pestaña: su store, sus datos y sus dimensiones filtrables.
    *
-   * Los selectores, el rango de fechas y los chips son idénticos para las dos
+   * Los selectores, el rango de fechas y los chips son idénticos para todas
    * —solo cambia de dónde salen las opciones y a qué store escriben—, así que
-   * se parametrizan en vez de duplicarse: dos copias acabarían divergiendo.
+   * se parametrizan en vez de duplicarse: varias copias acabarían divergiendo.
+   *
+   * `dependientes` lista los desplegables de segundo nivel —el subservicio de
+   * una unidad— con su padre y las filas donde se ve qué hijo cuelga de qué
+   * padre. Con el padre elegido, el hijo solo ofrece lo que cuelga de él.
    */
   const FUENTES = {
+    global: {
+      store: () => store,
+      datos: () => DATA,
+      filtros: () => store.dimsFiltrables,
+      etiquetas: {
+        medida: 'Medida', submedida: 'Submedida', unidad: 'Unidad / servicio',
+        area: 'Ubicación física / subservicio', grupo: 'Grupo ocupacional',
+        cargo: 'Cargo', estado: 'Estado de validación'
+      },
+      opciones: clave => DATA.dims[clave],
+      dependientes: {area: {padre: 'unidad', filas: () => DATA.rows}}
+    },
     iaas: {
       store: () => storeIaas,
       datos: () => DATA.iaas,
-      filtros: ['responsable', 'servicio', 'actividad'],
+      // Producción y casos son formularios distintos que fallan por separado:
+      // cada uno aporta sus filtros solo si llegó.
+      filtros: () => [
+        ...(DATA.iaas.ok ? ['responsable', 'servicio', 'actividad'] : []),
+        ...(casosOk() ? ['unidad', 'subservicio'] : [])
+      ],
       etiquetas: {responsable: 'Responsable', servicio: 'Servicio',
-                  actividad: 'Actividad'},
+                  actividad: 'Actividad', unidad: 'Unidad (casos)',
+                  subservicio: 'Subservicio (casos)'},
       // La actividad no es una dimensión codificada: es la lista de columnas.
-      opciones: clave => clave === 'actividad'
-        ? DATA.iaas.actividades : DATA.iaas.dims[clave]
+      opciones: clave => clave === 'actividad' ? DATA.iaas.actividades
+        : (clave === 'unidad' || clave === 'subservicio')
+          ? DATA.iaas.casos.dims[clave] : DATA.iaas.dims[clave],
+      dependientes: {subservicio: {padre: 'unidad',
+                                   filas: () => DATA.iaas.casos.rows}}
     },
     vigilancia: {
       store: () => storeVig,
       datos: () => DATA.vigilancia,
-      filtros: ['definicion', 'servicio', 'ubicacion', 'diagnostico', 'origen',
-                'microorganismo', 'dispositivo', 'personal'],
+      filtros: () => ['definicion', 'servicio', 'ubicacion', 'diagnostico',
+                      'origen', 'microorganismo', 'dispositivo', 'personal'],
       etiquetas: {definicion: 'Definición', servicio: 'Servicio',
                   ubicacion: 'Ubicación', diagnostico: 'Diagnóstico',
                   origen: 'Origen', microorganismo: 'Microorganismo',
                   dispositivo: 'Dispositivo', personal: 'Personal PCI'},
-      opciones: clave => DATA.vigilancia.dims[clave]
+      opciones: clave => DATA.vigilancia.dims[clave],
+      dependientes: {ubicacion: {padre: 'servicio',
+                                 filas: () => DATA.vigilancia.rows}}
     }
   };
+  function casosOk() { return !!(DATA.iaas.casos && DATA.iaas.casos.ok); }
+  // Responsable y formulario son vistas de las mismas supervisiones.
+  const fuenteActual = () => FUENTES[views.estado.vista] || FUENTES.global;
 
-  function selectorFuente(fuente, clave) {
-    const label = document.createElement('label');
-    label.textContent = fuente.etiquetas[clave];
-    const sel = document.createElement('select');
-    const todos = document.createElement('option');
-    todos.value = '';
-    todos.textContent = 'Todos';
-    sel.appendChild(todos);
-    fuente.opciones(clave).forEach((valor, i) => {
-      const op = document.createElement('option');
-      op.value = String(i);
-      op.textContent = valor;   // valor de la fuente: textContent, no innerHTML
-      sel.appendChild(op);
-    });
-    sel.addEventListener('change', () => {
-      fuente.store().set(clave, sel.value === '' ? null : Number(sel.value));
-    });
-    sel.dataset.clave = clave;
-    label.appendChild(sel);
-    return label;
+  /** Índices que el filtro `clave` puede ofrecer con lo elegido en su padre. */
+  function permitidos(fuente, clave) {
+    const todos = fuente.opciones(clave).map((_, i) => i);
+    const dep = fuente.dependientes[clave];
+    if (!dep) return todos;
+    const padre = fuente.store().filters[dep.padre];
+    if (padre === null) return todos;
+    const r = dep.filas();
+    const vistos = new Set();
+    for (let i = 0; i < r[clave].length; i++) {
+      if (padre.includes(r[dep.padre][i])) vistos.add(r[clave][i]);
+    }
+    return todos.filter(i => vistos.has(i));
   }
 
-  function fechaFuente(fuente, clave, texto) {
+  /** Escribe un filtro y quita del hijo lo que ya no cuelga del padre nuevo.
+   *
+   * Sin la poda, quitar una unidad dejaría elegido un subservicio suyo que ya
+   * no se ve en el desplegable y seguiría filtrando a escondidas.
+   */
+  function escribir(fuente, clave, valor) {
+    const st = fuente.store();
+    st.filters[clave] = valor && valor.length ? valor : null;
+    for (const [hijo, dep] of Object.entries(fuente.dependientes)) {
+      if (dep.padre !== clave || st.filters[hijo] === null) continue;
+      const ok = new Set(permitidos(fuente, hijo));
+      const quedan = st.filters[hijo].filter(i => ok.has(i));
+      st.filters[hijo] = quedan.length ? quedan : null;
+    }
+    st.emit();
+  }
+
+  // Funciones que ponen cada control de la barra al día con su store.
+  const controles = [];
+
+  /** Desplegable de casillas: varios valores de una dimensión a la vez. */
+  function selectorMultiple(fuente, clave) {
+    const campo = document.createElement('div');
+    campo.className = 'campo';
+    const titulo = document.createElement('span');
+    titulo.textContent = fuente.etiquetas[clave];
+    const caja = document.createElement('details');
+    caja.className = 'multi';
+    const resumen = document.createElement('summary');
+    const panel = document.createElement('div');
+    panel.className = 'multi-panel';
+    const buscar = document.createElement('input');
+    buscar.type = 'search';
+    buscar.placeholder = 'Buscar…';
+    const acciones = document.createElement('div');
+    acciones.className = 'multi-acciones';
+    const todos = document.createElement('button');
+    todos.type = 'button';
+    todos.textContent = 'Todos';
+    todos.title = 'Quitar este filtro';
+    todos.addEventListener('click', () => escribir(fuente, clave, null));
+    acciones.appendChild(todos);
+    const lista = document.createElement('div');
+    lista.className = 'multi-lista';
+    panel.append(buscar, acciones, lista);
+    caja.append(resumen, panel);
+    campo.append(titulo, caja);
+
+    function refrescar() {
+      const etiquetas = fuente.opciones(clave);
+      const elegidos = fuente.store().filters[clave] || [];
+      resumen.textContent = !elegidos.length ? 'Todos'
+        : elegidos.length === 1 ? etiquetas[elegidos[0]]
+        : elegidos.length + ' seleccionados';
+      resumen.title = elegidos.map(i => etiquetas[i]).join(', ');
+      caja.classList.toggle('activo', elegidos.length > 0);
+      // Marcar una casilla repinta la lista; sin esto saltaría al principio.
+      const scroll = lista.scrollTop;
+      const texto = buscar.value.trim().toLowerCase();
+      const ofrecidos = permitidos(fuente, clave).filter(i =>
+        !texto || String(etiquetas[i]).toLowerCase().includes(texto));
+      lista.replaceChildren();
+      for (const i of ofrecidos) {
+        const fila = document.createElement('label');
+        const casilla = document.createElement('input');
+        casilla.type = 'checkbox';
+        casilla.checked = elegidos.includes(i);
+        casilla.addEventListener('change', () => {
+          const actual = fuente.store().filters[clave] || [];
+          escribir(fuente, clave, casilla.checked
+            ? [...actual, i] : actual.filter(v => v !== i));
+        });
+        const nombre = document.createElement('span');
+        nombre.textContent = etiquetas[i];   // valor de la fuente: textContent
+        fila.append(casilla, nombre);
+        lista.appendChild(fila);
+      }
+      if (!ofrecidos.length) {
+        const nada = document.createElement('div');
+        nada.className = 'multi-vacio';
+        nada.textContent = 'Sin opciones';
+        lista.appendChild(nada);
+      }
+      lista.scrollTop = scroll;
+    }
+    buscar.addEventListener('input', refrescar);
+    caja.addEventListener('toggle', () => {
+      if (!caja.open) return;
+      // Un solo desplegable abierto: dos a la vez se tapan entre sí.
+      barra.querySelectorAll('details.multi[open]').forEach(otro => {
+        if (otro !== caja) otro.open = false;
+      });
+      buscar.focus();
+    });
+    controles.push(refrescar);
+    return campo;
+  }
+
+  function selectorFecha(fuente, clave, texto, meta) {
     const label = document.createElement('label');
     label.textContent = texto;
     const input = document.createElement('input');
     input.type = 'date';
-    input.min = aISO(fuente.datos().meta.dia_min);
-    input.max = aISO(fuente.datos().meta.dia_max);
+    input.min = aISO(meta.dia_min);
+    input.max = aISO(meta.dia_max);
     input.addEventListener('change', () => {
       fuente.store().set(clave, input.value ? aDia(input.value) : null);
     });
-    input.dataset.clave = clave;
     label.appendChild(input);
-    return label;
-  }
-
-  function botonLimpiar(alLimpiar) {
-    const limpiar = document.createElement('button');
-    limpiar.className = 'chip';
-    limpiar.type = 'button';
-    limpiar.textContent = 'Limpiar filtros';
-    limpiar.addEventListener('click', () => {
-      barra.querySelectorAll('select, input').forEach(c => { c.value = ''; });
-      alLimpiar();
+    controles.push(() => {
+      const valor = fuente.store().filters[clave];
+      input.value = valor === null ? '' : aISO(valor);
     });
-    return limpiar;
+    return label;
   }
 
   function construirBarra() {
     // La barra se reconstruye al cambiar de pestaña: las dimensiones de una
     // fuente no existen en las otras y saldrían como selectores muertos.
     barra.replaceChildren();
-    const fuente = FUENTES[views.estado.vista];
-    if (fuente) {
-      // Sin datos no hay qué filtrar; el aviso lo pinta la vista.
-      if (!fuente.datos().ok) return;
-      barra.append(fechaFuente(fuente, 'desde', 'Desde'),
-                   fechaFuente(fuente, 'hasta', 'Hasta'));
-      fuente.filtros.forEach(k => barra.appendChild(selectorFuente(fuente, k)));
-      barra.appendChild(botonLimpiar(() => fuente.store().clearAll()));
-      return;
-    }
+    controles.length = 0;
+    const fuente = fuenteActual();
+    // Sin datos no hay qué filtrar; el aviso lo pinta la vista. En IAAS el
+    // rango sale de producción y, si solo llegaron los casos, de los casos.
+    const meta = fuente.datos().ok !== false ? fuente.datos().meta
+      : (fuente === FUENTES.iaas && casosOk()) ? DATA.iaas.casos.meta : null;
+    if (!meta) return;
     // El rango de fechas va primero: es el filtro al que todos van.
-    barra.append(fecha('desde', 'Desde'), fecha('hasta', 'Hasta'));
-    store.dimsFiltrables.forEach(k => barra.appendChild(selector(k)));
-    barra.appendChild(botonLimpiar(() => store.clearAll()));
+    barra.append(selectorFecha(fuente, 'desde', 'Desde', meta),
+                 selectorFecha(fuente, 'hasta', 'Hasta', meta));
+    fuente.filtros().forEach(k => barra.appendChild(selectorMultiple(fuente, k)));
+    const limpiar = document.createElement('button');
+    limpiar.className = 'chip';
+    limpiar.type = 'button';
+    limpiar.textContent = 'Limpiar filtros';
+    limpiar.addEventListener('click', () => fuente.store().clearAll());
+    barra.appendChild(limpiar);
+    controles.forEach(fn => fn());
   }
 
-  function pintarChipsFuente(fuente) {
-    zonaChips.replaceChildren();
-    for (const [clave, valor] of Object.entries(fuente.store().filters)) {
-      if (valor === null) continue;
-      const chip = document.createElement('button');
-      chip.className = 'chip';
-      chip.type = 'button';
-      const texto = clave === 'desde' ? 'Desde ' + aISO(valor)
-        : clave === 'hasta' ? 'Hasta ' + aISO(valor)
-        : fuente.etiquetas[clave] + ': ' + fuente.opciones(clave)[valor];
-      chip.textContent = texto + ' ✕';
-      chip.addEventListener('click', () => {
-        const control = barra.querySelector('[data-clave="' + clave + '"]');
-        if (control) control.value = '';
-        fuente.store().clear(clave);
-      });
-      zonaChips.appendChild(chip);
-    }
-  }
-
+  /** Un chip por valor elegido: se quita uno sin tocar los demás. */
   function pintarChips() {
     zonaChips.replaceChildren();
-    for (const [clave, valor] of Object.entries(store.filters)) {
+    const fuente = fuenteActual();
+    const st = fuente.store();
+    const chip = (texto, alQuitar) => {
+      const boton = document.createElement('button');
+      boton.className = 'chip';
+      boton.type = 'button';
+      boton.textContent = texto + ' ✕';
+      boton.addEventListener('click', alQuitar);
+      zonaChips.appendChild(boton);
+    };
+    for (const [clave, valor] of Object.entries(st.filters)) {
       if (valor === null) continue;
-      const chip = document.createElement('button');
-      chip.className = 'chip';
-      chip.type = 'button';
-      const texto = clave === 'desde' ? 'Desde ' + aISO(valor)
-        : clave === 'hasta' ? 'Hasta ' + aISO(valor)
-        : ETIQUETAS[clave] + ': ' + DATA.dims[clave][valor];
-      chip.textContent = texto + ' ✕';
-      chip.addEventListener('click', () => {
-        const control = barra.querySelector(`[data-clave="${clave}"]`);
-        if (control) control.value = '';
-        store.clear(clave);
-      });
-      zonaChips.appendChild(chip);
+      if (clave === 'desde' || clave === 'hasta') {
+        chip((clave === 'desde' ? 'Desde ' : 'Hasta ') + aISO(valor),
+             () => st.clear(clave));
+        continue;
+      }
+      for (const i of valor) {
+        chip(fuente.etiquetas[clave] + ': ' + fuente.opciones(clave)[i],
+             () => escribir(fuente, clave, st.filters[clave].filter(v => v !== i)));
+      }
     }
+  }
+
+  function alCambiar() {
+    controles.forEach(fn => fn());
+    pintarChips();
+    views.render();
   }
 
   function pestanas() {
@@ -3042,21 +3166,24 @@ const app = (() => {
           otro.setAttribute('aria-selected', String(otro === b)));
         views.estado.vista = b.dataset.view;
         construirBarra();
-        const fuente = FUENTES[views.estado.vista];
-        if (fuente) pintarChipsFuente(fuente);
-        else pintarChips();
+        pintarChips();
         views.render();
       });
     });
   }
 
+  // Un clic fuera cierra el desplegable abierto, como haría un <select>.
+  document.addEventListener('click', e => {
+    barra.querySelectorAll('details.multi[open]').forEach(caja => {
+      if (!caja.contains(e.target)) caja.open = false;
+    });
+  });
+
   construirBarra();
   pestanas();
-  store.onChange(() => { pintarChips(); views.render(); });
-  storeIaas.onChange(() => { pintarChipsFuente(FUENTES.iaas); views.render(); });
-  storeVig.onChange(() => {
-    pintarChipsFuente(FUENTES.vigilancia); views.render();
-  });
+  store.onChange(alCambiar);
+  storeIaas.onChange(alCambiar);
+  storeVig.onChange(alCambiar);
   // Repintar los gráficos al cambiar de tema: Chart.js copió los colores
   // al construirse y no vuelve a leer las variables CSS por su cuenta.
   window.addEventListener('themechange', () => views.render());

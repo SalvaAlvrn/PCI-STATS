@@ -70,9 +70,18 @@ y una prueba comprueba que no aparecen en el HTML generado.
 
 Los casos confirmados se reparten por la **ubicación del paciente**, no por
 dónde se adquirió la infección, en sus dos niveles (`Ubi1` y `Ubi2`–`Ubi8`).
-Solo el rango de fechas filtra esas tarjetas —responsable, servicio y actividad
-son dimensiones del formulario de producción, que no existen en el de casos—, y
-la propia tarjeta lo dice.
+Esas tarjetas las filtran el rango de fechas, la unidad y el subservicio;
+responsable, servicio y actividad son dimensiones del formulario de producción,
+que no existen en el de casos, y la propia tarjeta lo dice.
+
+## Filtros
+
+En todas las pestañas cada filtro admite varios valores a la vez: dentro de un
+mismo filtro los valores se suman (dos ubicaciones muestran los registros de una
+más los de la otra) y entre filtros distintos se cruzan. Los desplegables de
+segundo nivel —ubicación física o subservicio en Global, subservicio de los casos
+en Investigación, ubicación en Vigilancia— solo ofrecen lo que cuelga de las
+unidades elegidas, y al quitar una unidad se descartan sus subservicios.
 
 ## El apartado de vigilancia de IAAS
 
