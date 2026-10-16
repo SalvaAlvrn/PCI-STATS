@@ -130,3 +130,39 @@ def test_el_borrador_guarda_la_marca_del_anio_que_se_empezo_a_editar():
     d = datos(control={"2026": "copia"})
     assert ejecutar("m.borradorDeAnio(datos, 2026).actualizado", d) == "copia"
     assert ejecutar("m.borradorDeAnio(datos, 2025).actualizado", d) == ""
+
+
+# --- tendencia ---------------------------------------------------------------
+
+def test_la_serie_de_12_meses_cruza_de_anio_y_termina_en_el_mes_dado():
+    d = datos(valores=[
+        {"anio": 2025, "mes": 3, "indicador": "navm", "n": 1, "d": 1000},
+        {"anio": 2025, "mes": 2, "indicador": "navm", "n": 9, "d": 1000},
+        {"anio": 2026, "mes": 2, "indicador": "navm", "n": 2, "d": 1000}])
+    s = ejecutar("m.serieUltimos12(datos, 'navm', 2026, 2)", d)
+    assert s["labels"][0] == "Mar 25" and s["labels"][-1] == "Feb 26"
+    assert len(s["labels"]) == 12
+    assert s["t"][0] == 1 and s["t"][-1] == 2
+    assert s["n"][-1] == 2 and s["d"][-1] == 1000
+    assert s["hayDatos"] is True
+
+
+def test_la_serie_deja_huecos_sin_n_sin_d_o_con_d_cero():
+    d = datos(valores=[
+        {"anio": 2026, "mes": 1, "indicador": "navm", "n": 3, "d": 0},
+        {"anio": 2026, "mes": 2, "indicador": "navm", "n": None, "d": 10}])
+    s = ejecutar("m.serieUltimos12(datos, 'navm', 2026, 2)", d)
+    assert s["t"] == [None] * 12
+    assert s["hayDatos"] is False
+
+
+def test_la_meta_de_cada_mes_es_la_de_su_anio():
+    d = datos(metas=[{"anio": 2025, "indicador": "navm", "meta": 5},
+                     {"anio": 2026, "indicador": "navm", "meta": 4}])
+    s = ejecutar("m.serieUltimos12(datos, 'navm', 2026, 2)", d)
+    assert s["meta"] == [5] * 10 + [4, 4]
+
+
+def test_sin_meta_la_serie_de_meta_queda_vacia():
+    s = ejecutar("m.serieUltimos12(datos, 'navm', 2026, 2)", datos())
+    assert s["meta"] == [None] * 12

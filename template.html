@@ -188,6 +188,10 @@ tfoot td { font-weight: 600; border-top: 2px solid var(--border); border-bottom:
 .tip .k { display: inline-block; width: 14px; height: 2px; vertical-align: middle; margin-right: 6px; }
 .tip .n { color: var(--text-secondary); }
 /* Indicadores institucionales */
+.ind-tendencias { margin-top: 16px; }
+.ind-mini h3 { font-size: 13px; font-weight: 600; margin: 0 0 2px; }
+.ind-mini .plot { height: 180px; }
+.ind-mini .empty { padding: 60px 0; }
 .ind-barra { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 12px 0; }
 .ind-barra select, .ind-barra input {
   font: inherit; font-size: 13px; padding: 4px 8px; border-radius: 6px;
@@ -1187,8 +1191,36 @@ const indicadoresMod = (() => {
     };
   }
 
+  /** Los doce meses que terminan en `mes` de `anio`, cruzando de año.
+   *
+   * La meta de cada mes es la de su año: si cambia en enero, la línea de meta
+   * cambia ahí. `hayDatos` dice si hay al menos una tasa que dibujar.
+   */
+  function serieUltimos12(datos, id, anio, mes) {
+    const ind = datos.indicadores.find(i => i.id === id);
+    const s = {labels: [], t: [], n: [], d: [], meta: [], hayDatos: false};
+    for (let i = 11; i >= 0; i--) {
+      const total = anio * 12 + (mes - 1) - i;
+      const a = Math.floor(total / 12);
+      const m = total % 12 + 1;
+      const v = datos.valores.find(x =>
+        x.anio === a && x.mes === m && x.indicador === id);
+      const meta = datos.metas.find(x => x.anio === a && x.indicador === id);
+      const n = v ? v.n : null;
+      const d = v ? v.d : null;
+      const t = tasa(n, d, ind.k);
+      s.labels.push(MESES[m - 1] + ' ' + String(a).slice(2));
+      s.t.push(t);
+      s.n.push(n);
+      s.d.push(d);
+      s.meta.push(meta ? meta.meta : null);
+      if (t !== null) s.hayDatos = true;
+    }
+    return s;
+  }
+
   return {MESES, tasa, validar, estadoMeta, anios, tablaAnio, borradorDeAnio,
-          validarBorrador, reemplazarAnio};
+          validarBorrador, reemplazarAnio, serieUltimos12};
 })();
 </script>
 <script id="mod-charts">
@@ -1302,7 +1334,7 @@ const charts = (() => {
     canvas.addEventListener('blur', ocultarTip);
   }
 
-  function line(canvas, {labels, series, formato = pct}) {
+  function line(canvas, {labels, series, formato = pct, tip = null}) {
     const opciones = base();
     if (formato === pct) {
       opciones.scales.y.min = 0;
@@ -1319,8 +1351,11 @@ const charts = (() => {
           borderColor: s.color,
           backgroundColor: s.color,
           borderWidth: s.ancho || 2,
-          pointRadius: 4,             // marcador de 8px de diámetro
-          pointHoverRadius: 6,
+          // Una serie discontinua es una referencia —una meta—, no datos:
+          // sin marcadores, para que no compita con la serie que se mide.
+          borderDash: s.discontinua ? [5, 4] : [],
+          pointRadius: s.discontinua ? 0 : 4,   // marcador de 8px de diámetro
+          pointHoverRadius: s.discontinua ? 0 : 6,
           pointBorderColor: token('surface'),
           pointBorderWidth: 2,        // anillo de superficie
           spanGaps: false,
@@ -1330,12 +1365,12 @@ const charts = (() => {
       options: opciones
     });
     vivos.add(grafico);
-    enganchaTip(canvas, grafico, i => [
+    enganchaTip(canvas, grafico, tip || (i => [
       {valor: labels[i], nombre: ''},
       ...series.map(s => ({
         color: s.color, valor: formato(s.data[i]), nombre: s.label
       }))
-    ]);
+    ]));
     return grafico;
   }
 
@@ -1955,6 +1990,56 @@ const views = (() => {
     zona.appendChild(tabla);
     tarjeta.appendChild(zona);
     contenedor.appendChild(tarjeta);
+    // Con la cuadrícula abierta los gráficos mostrarían datos que el borrador
+    // ya contradice.
+    if (!editando) contenedor.appendChild(tarjetaTendencias(hoy));
+  }
+
+  /** Un gráfico pequeño por indicador: los últimos 12 meses frente a la meta.
+   *
+   * Cada uno con su propio eje: las tasas van por 100 o por 1000 y no se
+   * comparan entre indicadores.
+   */
+  function tarjetaTendencias(hoy) {
+    const tarjeta = card('Tendencia de los últimos 12 meses',
+      'T por mes hasta ' + indicadoresMod.MESES[hoy.getMonth()] + ' ' +
+      hoy.getFullYear() + '. La línea discontinua es la meta; los meses sin ' +
+      'N o sin D quedan como hueco.');
+    tarjeta.classList.add('ind-tendencias');
+    const rejilla = document.createElement('div');
+    rejilla.className = 'grid-2';
+    for (const indicador of ind.datos.indicadores) {
+      const s = indicadoresMod.serieUltimos12(
+        ind.datos, indicador.id, hoy.getFullYear(), hoy.getMonth() + 1);
+      const mini = document.createElement('div');
+      mini.className = 'ind-mini';
+      mini.appendChild(celdaTexto('h3', indicador.nombre));
+      mini.appendChild(celdaTexto('div', '×' + indicador.k, 'ind-nd'));
+      if (!s.hayDatos) {
+        mini.appendChild(vacio('Sin datos en los últimos 12 meses.'));
+        rejilla.appendChild(mini);
+        continue;
+      }
+      const series = [{label: 'T', data: s.t, color: charts.token('series-1')}];
+      if (s.meta.some(m => m !== null)) {
+        series.push({label: 'Meta', data: s.meta, discontinua: true,
+                     color: charts.token('text-muted')});
+      }
+      charts.line(plot(mini, 'ind-t-' + indicador.id), {
+        labels: s.labels, series, formato: fmtNum,
+        tip: i => [
+          {valor: s.labels[i], nombre: ''},
+          {color: charts.token('series-1'), valor: fmtNum(s.t[i]),
+           nombre: 'T · ' + fmtNum(s.n[i]) + ' / ' + fmtNum(s.d[i])},
+          ...(s.meta[i] === null ? [] :
+              [{color: charts.token('text-muted'), valor: fmtNum(s.meta[i]),
+                nombre: 'meta'}]),
+        ],
+      });
+      rejilla.appendChild(mini);
+    }
+    tarjeta.appendChild(rejilla);
+    return tarjeta;
   }
 
   // renderGlobal, renderResponsable y renderFormulario se añaden en las
