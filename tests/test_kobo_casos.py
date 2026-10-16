@@ -56,6 +56,8 @@ def esquema_casos():
                 {"list_name": "def", "name": "sospechoso", "label": ["Sospechoso"]},
                 {"list_name": "def", "name": "confirmado", "label": ["Confirmado"]},
                 {"list_name": "def", "name": "no_iaas", "label": ["No IAAS"]},
+                {"list_name": "def", "name": "isq_no_iaas",
+                 "label": ["ISQ no IAAS"]},
                 {"list_name": "unidades", "name": "ubi1.2",
                  "label": ["Hospitalización Medicina Interna"]},
                 {"list_name": "unidades", "name": "ubi1.4",
@@ -125,6 +127,21 @@ def test_validar_casos_exige_la_opcion_confirmado():
 def test_solo_cuenta_los_casos_confirmados():
     data = construir_con([caso(), caso(definicion="sospechoso"),
                           caso(definicion="no_iaas")])
+    assert data["meta"]["casos"] == 1
+
+
+def test_isq_no_iaas_cuenta_como_confirmado():
+    data = construir_con([caso(), caso(definicion="isq_no_iaas")])
+    assert data["meta"]["casos"] == 2
+
+
+def test_sin_la_opcion_isq_no_iaas_sigue_contando_los_confirmados():
+    esquema = esquema_casos()
+    esquema["content"]["choices"] = [
+        c for c in esquema["content"]["choices"]
+        if c["name"] != "isq_no_iaas"
+    ]
+    data = construir_con([caso()], esquema)
     assert data["meta"]["casos"] == 1
 
 

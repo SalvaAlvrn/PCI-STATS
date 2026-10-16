@@ -150,6 +150,20 @@ def test_un_caso_cuyo_texto_menciona_test_no_se_descarta():
     assert construir(casos=casos)["meta"]["casos"] == 1
 
 
+def test_isq_no_iaas_cuenta_como_caso_confirmado():
+    casos = [
+        {"ID_CASO": "C1", "DEFINICION_CASO": iaas.CONFIRMADO,
+         "FECHA_NOTIFICACION": "05/06/2026", "ARCHIVADO": "FALSE",
+         "NOMBRE_PACIENTE": PACIENTE},
+        {"ID_CASO": "C2", "DEFINICION_CASO": "ISQ no IAAS",
+         "FECHA_NOTIFICACION": "06/06/2026", "ARCHIVADO": "FALSE",
+         "NOMBRE_PACIENTE": PACIENTE},
+    ]
+    data = construir(casos=casos)
+    assert data["meta"]["confirmados"] == 2
+    assert data["dims"]["definicion"] == [iaas.CONFIRMADO]
+
+
 # --- rescate de fechas -----------------------------------------------------
 
 def test_las_fechas_que_la_migracion_perdio_se_rescatan_del_export_de_kobo():

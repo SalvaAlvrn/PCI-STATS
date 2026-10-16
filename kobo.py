@@ -316,6 +316,9 @@ SUBSERVICIOS = ["Ubi2", "Ubi3", "Ubi4", "Ubi5", "Ubi6", "Ubi7", "Ubi8"]
 # La opción de «Definición de caso» que cuenta. Se busca por etiqueta porque el
 # nombre interno de la opción es lo que cambia si alguien rehace la lista.
 ETIQUETA_CONFIRMADO = "Confirmado"
+# Opciones que también cuentan como confirmado, igual que EQUIVALENCIAS en
+# iaas.py. No son obligatorias: si el formulario no las ofrece, no pasa nada.
+ETIQUETAS_EQUIVALENTES = ["ISQ no IAAS"]
 
 SIN_AREA = "(Sin registrar)"
 
@@ -372,17 +375,24 @@ def choices_por_lista(esquema):
     return salida
 
 
-def _opcion_confirmado(mapa, choices):
-    """Nombre interno de la opción «Confirmado» de «Definición de caso»."""
+def _opciones_confirmado(mapa, choices):
+    """Nombres internos de las opciones de «Definición de caso» que cuentan.
+
+    «Confirmado» es obligatoria; las de ETIQUETAS_EQUIVALENTES se suman si
+    existen.
+    """
     lista = mapa[CAMPOS_CASOS["definicion"]]["lista"]
     opciones = choices.get(lista, {})
-    for nombre, etiqueta in opciones.items():
-        if normalizar(etiqueta) == normalizar(ETIQUETA_CONFIRMADO):
-            return nombre
-    raise KoboError(
-        "«Definición de caso» ya no ofrece la opción "
-        f"«{ETIQUETA_CONFIRMADO}»: {sorted(opciones.values())}."
-    )
+    por_etiqueta = {normalizar(e): n for n, e in opciones.items()}
+    confirmado = por_etiqueta.get(normalizar(ETIQUETA_CONFIRMADO))
+    if confirmado is None:
+        raise KoboError(
+            "«Definición de caso» ya no ofrece la opción "
+            f"«{ETIQUETA_CONFIRMADO}»: {sorted(opciones.values())}."
+        )
+    equivalentes = {por_etiqueta[normalizar(e)] for e in ETIQUETAS_EQUIVALENTES
+                    if normalizar(e) in por_etiqueta}
+    return {confirmado} | equivalentes
 
 
 def validar_casos(esquema):
@@ -395,7 +405,7 @@ def validar_casos(esquema):
             f"se encontraron estas preguntas: {faltan}. Si las renombraste en "
             "Kobo, actualiza el manifiesto de kobo.py."
         )
-    _opcion_confirmado(mapa, choices_por_lista(esquema))
+    _opciones_confirmado(mapa, choices_por_lista(esquema))
     return mapa
 
 
@@ -406,7 +416,7 @@ def limpiar_casos(envios, mapa, choices):
     expediente y diagnóstico del paciente; nada de eso se copia, igual que en
     el apartado de producción.
     """
-    confirmado = _opcion_confirmado(mapa, choices)
+    confirmados = _opciones_confirmado(mapa, choices)
     ruta = {clave: mapa[nombre]["ruta"] for clave, nombre in CAMPOS_CASOS.items()}
     etiqueta_unidad = choices.get(mapa[CAMPOS_CASOS["unidad"]]["lista"], {})
     # Cada subservicio tiene su propia lista de opciones; se guarda junto a su
@@ -416,7 +426,7 @@ def limpiar_casos(envios, mapa, choices):
 
     filas = []
     for envio in envios:
-        if str(envio.get(ruta["definicion"], "")).strip() != confirmado:
+        if str(envio.get(ruta["definicion"], "")).strip() not in confirmados:
             continue
         crudo = str(envio.get(ruta["fecha"], "")).strip()
         fecha = crudo[:10]

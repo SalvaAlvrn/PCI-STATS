@@ -85,6 +85,12 @@ NO_IAAS = "No IAAS"
 # Si el sistema deja de escribir estas tres, todo el apartado se queda sin
 # base: no es un valor más de una lista, es el eje del tablero.
 DEFINICIONES = [CONFIRMADO, SOSPECHOSO, NO_IAAS]
+# Definiciones que el sistema escribe aparte pero que el tablero cuenta como
+# otra. Se unifican al limpiar para que KPIs, embudo, tasas y filtros las
+# traten igual sin repetir la regla en el JS.
+EQUIVALENCIAS = {
+    "ISQ no IAAS": CONFIRMADO,
+}
 
 SIN_DATO = "(Sin registrar)"
 # Personal escrito en la investigación que no corresponde a nadie de la lista
@@ -496,9 +502,11 @@ def limpiar(libro, nombres=()):
             if sueltos and SIN_IDENTIFICAR not in personal:
                 personal.append(SIN_IDENTIFICAR)
 
+        definicion = texto(caso["DEFINICION_CASO"]) or SIN_DATO
+
         filas.append({
             "dia": _dia(notificacion),
-            "definicion": texto(caso["DEFINICION_CASO"]) or SIN_DATO,
+            "definicion": EQUIVALENCIAS.get(definicion, definicion),
             "servicio": texto(caso["SERVICIO"]) or SIN_DATO,
             "ubicacion": texto(caso["UBICACION"]) or SIN_DATO,
             "diagnostico": texto(caso["DIAGNOSTICO_IAAS"]) or SIN_DATO,
