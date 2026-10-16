@@ -15,6 +15,7 @@ import pandas as pd
 import requests
 
 import iaas as vigilancia
+import indicadores
 import kobo
 
 
@@ -396,7 +397,7 @@ DIMENSIONES = {
 }
 
 
-def encode(df, formularios, iaas=None, vigilancia=None):
+def encode(df, formularios, iaas=None, vigilancia=None, institucionales=None):
     """Codifica el DataFrame limpio en diccionarios + columnas paralelas."""
     dims = {}
     rows = {}
@@ -450,6 +451,10 @@ def encode(df, formularios, iaas=None, vigilancia=None):
         "iaas": iaas or {"ok": False, "error": "No se consultó KoboToolbox."},
         "vigilancia": vigilancia or {
             "ok": False, "error": "No se consultó el sistema de IAAS."},
+        # A diferencia de las otras fuentes, el bloque fallido conserva el
+        # manifiesto: la página puede leer el libro en vivo sin la copia.
+        "indicadores": institucionales or indicadores.bloque_fallido(
+            "No se consultó el libro de indicadores."),
         # NOMBRE_EVALUADO tiene 2012 valores distintos sobre 2806 filas: el
         # diccionario no comprimiría nada. No es dimensión de agregación.
         "texts": {
@@ -581,8 +586,18 @@ def main(argv=None):
         print(f"AVISO: no se pudo construir la vigilancia de IAAS: {error}",
               file=sys.stderr)
 
+    # Indicadores institucionales: libro propio, que la página también escribe.
+    try:
+        institucionales = indicadores.construir()
+        print(f"Indicadores: {len(institucionales['valores'])} valores "
+              f"mensuales, {len(institucionales['metas'])} metas")
+    except indicadores.IndicadoresError as error:
+        institucionales = indicadores.bloque_fallido(error)
+        print(f"AVISO: no se pudieron construir los indicadores: {error}",
+              file=sys.stderr)
+
     data = encode(limpio, formularios, iaas=investigacion,
-                  vigilancia=casos)
+                  vigilancia=casos, institucionales=institucionales)
     escritos = render_html(
         data, raiz / "template.html", raiz / "vendor" / "chart.umd.min.js", salida
     )

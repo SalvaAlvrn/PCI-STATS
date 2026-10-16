@@ -8,6 +8,7 @@ import requests
 
 import build_dashboard
 import iaas
+import indicadores
 import kobo
 from build_dashboard import (
     AREA_NULA,
@@ -512,6 +513,42 @@ def test_encode_lleva_las_dos_fuentes_de_iaas_por_separado(registros_ok,
                   vigilancia={"ok": True, "meta": {"casos": 7}})
     assert data["iaas"]["ok"] is False
     assert data["vigilancia"]["meta"]["casos"] == 7
+
+
+def test_encode_lleva_el_bloque_de_indicadores(registros_ok, formularios_ok,
+                                               nombres_ok):
+    limpio = clean(registros_ok, formularios_ok, nombres_ok)
+    bloque = {"ok": True, "valores": [], "metas": [], "control": {}}
+    data = encode(limpio, formularios_ok, institucionales=bloque)
+    assert data["indicadores"] is bloque
+
+
+def test_encode_sin_indicadores_deja_un_bloque_fallido_con_manifiesto(
+        registros_ok, formularios_ok, nombres_ok):
+    limpio = clean(registros_ok, formularios_ok, nombres_ok)
+    data = encode(limpio, formularios_ok)
+    assert data["indicadores"]["ok"] is False
+    assert data["indicadores"]["indicadores"] == indicadores.INDICADORES
+
+
+def test_main_publica_igual_cuando_el_libro_de_indicadores_falla(libro_real,
+                                                                  capsys):
+    capturado = {}
+
+    def espia(data, template, vendor, salida):
+        capturado["data"] = data
+        return 0
+
+    with patch("build_dashboard.indicadores.construir",
+               side_effect=indicadores.IndicadoresError("HTTP 404")), \
+         patch("build_dashboard.render_html", side_effect=espia):
+        codigo = build_dashboard.main([str(libro_real)])
+
+    assert codigo == 0
+    assert capturado["data"]["indicadores"]["ok"] is False
+    assert capturado["data"]["indicadores"]["error"] == "HTTP 404"
+    salida = capsys.readouterr()
+    assert "AVISO: no se pudieron construir los indicadores: HTTP 404" in salida.err
 
 
 def test_main_publica_igual_cuando_kobo_falla(libro_real, capsys):
