@@ -1050,6 +1050,123 @@ function crearIaas(iaas) {
   return {filasActivas, kpis, porActividad, porDim, series};
 }
 </script>
+<script id="mod-indicadores">
+/** Indicadores institucionales: cálculo, validación y borradores.
+ *
+ * Funciones puras: la red y el DOM viven en mod-views. Se prueban con node en
+ * tests/test_indicadores_js.py.
+ */
+const indicadoresMod = (() => {
+  const MESES = ['Ene', 'Feb', 'Mar', 'Abr', 'May', 'Jun',
+                 'Jul', 'Ago', 'Sep', 'Oct', 'Nov', 'Dic'];
+
+  /** T = N / D · k. Sin N, sin D o con D = 0 no hay tasa: ni 0 ni infinito. */
+  function tasa(n, d, k) {
+    if (n === null || d === null || d === 0) return null;
+    return n / d * k;
+  }
+
+  /** Texto de una celda → número ≥ 0, o null si está vacía.
+   *
+   * Se acepta la coma decimal porque es la que escribe el equipo. Con punto y
+   * coma a la vez no se adivina cuál es el decimal: es un error.
+   */
+  function validar(texto) {
+    const limpio = String(texto === null || texto === undefined ? '' : texto)
+      .trim().replace(',', '.');
+    if (limpio === '') return {ok: true, valor: null};
+    if (!/^\d+(\.\d+)?$/.test(limpio)) {
+      return {ok: false, error: 'Debe ser un número mayor o igual que 0'};
+    }
+    return {ok: true, valor: Number(limpio)};
+  }
+
+  /** La meta es un tope: superarla es 'sobre'; igualarla o quedar debajo,
+   * 'dentro'. Sin tasa o sin meta no hay comparación. */
+  function estadoMeta(t, meta) {
+    if (t === null || meta === null || meta === undefined) return null;
+    return t > meta ? 'sobre' : 'dentro';
+  }
+
+  /** Años del selector: los que tienen datos más el actual, en orden. */
+  function anios(datos, actual) {
+    const s = new Set([actual]);
+    datos.valores.forEach(v => s.add(v.anio));
+    datos.metas.forEach(m => s.add(m.anio));
+    return [...s].sort((a, b) => a - b);
+  }
+
+  /** Una fila por indicador con sus doce meses ya calculados. */
+  function tablaAnio(datos, anio) {
+    return datos.indicadores.map(ind => {
+      const m = datos.metas.find(x => x.anio === anio && x.indicador === ind.id);
+      const meta = m ? m.meta : null;
+      const meses = MESES.map((_, i) => {
+        const v = datos.valores.find(x =>
+          x.anio === anio && x.mes === i + 1 && x.indicador === ind.id);
+        const n = v ? v.n : null;
+        const d = v ? v.d : null;
+        const t = tasa(n, d, ind.k);
+        return {n, d, t, estado: estadoMeta(t, meta)};
+      });
+      return {indicador: ind, meta, meses};
+    });
+  }
+
+  /** Borrador editable de un año: los mismos números, como texto. */
+  function borradorDeAnio(datos, anio) {
+    const texto = x => x === null ? '' : String(x);
+    const valores = {};
+    const metas = {};
+    for (const fila of tablaAnio(datos, anio)) {
+      const id = fila.indicador.id;
+      valores[id] = fila.meses.map(c => ({n: texto(c.n), d: texto(c.d)}));
+      metas[id] = texto(fila.meta);
+    }
+    return {anio, valores, metas};
+  }
+
+  /** Borrador → lo que se envía al script, o las celdas mal escritas.
+   * Los meses sin N ni D no se envían: no son una fila del libro. */
+  function validarBorrador(borrador) {
+    const errores = [];
+    const valores = [];
+    const metas = [];
+    for (const [id, meses] of Object.entries(borrador.valores)) {
+      meses.forEach((celda, i) => {
+        const n = validar(celda.n);
+        const d = validar(celda.d);
+        if (!n.ok) errores.push({indicador: id, mes: i + 1, campo: 'n', error: n.error});
+        if (!d.ok) errores.push({indicador: id, mes: i + 1, campo: 'd', error: d.error});
+        if (n.ok && d.ok && (n.valor !== null || d.valor !== null)) {
+          valores.push({mes: i + 1, indicador: id, n: n.valor, d: d.valor});
+        }
+      });
+    }
+    for (const [id, texto] of Object.entries(borrador.metas)) {
+      const m = validar(texto);
+      if (!m.ok) errores.push({indicador: id, mes: null, campo: 'meta', error: m.error});
+      else if (m.valor !== null) metas.push({indicador: id, meta: m.valor});
+    }
+    return {errores, valores, metas};
+  }
+
+  /** Datos con el año `anio` sustituido por lo que guardó el script. */
+  function reemplazarAnio(datos, anio, valores, metas, actualizado) {
+    return {
+      ...datos,
+      valores: datos.valores.filter(v => v.anio !== anio)
+        .concat(valores.map(v => ({anio, ...v}))),
+      metas: datos.metas.filter(m => m.anio !== anio)
+        .concat(metas.map(m => ({anio, ...m}))),
+      control: {...datos.control, [anio]: actualizado},
+    };
+  }
+
+  return {MESES, tasa, validar, estadoMeta, anios, tablaAnio, borradorDeAnio,
+          validarBorrador, reemplazarAnio};
+})();
+</script>
 <script id="mod-charts">
 const charts = (() => {
   const vivos = new Set();
