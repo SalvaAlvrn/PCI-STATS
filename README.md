@@ -232,6 +232,48 @@ fecha + servicio + edad basta para reidentificar a alguien.
 Se descargan y fallan juntas: si el libro cambia de forma, la pestaña muestra el
 motivo y el resto del dashboard se publica igual.
 
+## Indicadores institucionales
+
+La pestaña "Indicadores" muestra los 10 indicadores institucionales de PCI por
+mes (T = N / D · k) frente a su meta, y es la única del dashboard que se puede
+editar. Los números viven en un Google Sheet propio; las definiciones, en
+`indicadores.py`.
+
+- **Ver**: cualquiera. La página lee el libro en vivo a través del Apps Script
+  y, si no responde en 8 segundos, muestra la copia del último build.
+- **Editar**: botón "Editar", cuadrícula de N, D y meta, y la clave del equipo
+  para guardar. Si otra persona guardó el mismo año mientras tanto, el guardado
+  se rechaza y hay que recargar; lo escrito no se pierde.
+
+### Puesta en marcha (una vez)
+
+1. Crear un Google Sheet con tres pestañas y estas cabeceras en la fila 1:
+   - `VALORES`: `ANIO`, `MES`, `INDICADOR`, `NUMERADOR`, `DENOMINADOR`
+   - `METAS`: `ANIO`, `INDICADOR`, `META`
+   - `CONTROL`: `ANIO`, `ACTUALIZADO`
+
+   Compartirlo como "cualquiera con el enlace puede ver".
+2. En el Sheet, Extensiones → Apps Script: pegar `apps_script/indicadores.gs`.
+   En Configuración del proyecto → Propiedades del script, crear `CLAVE` con la
+   clave del equipo. Implementar → Nueva implementación → Aplicación web,
+   "Ejecutar como: yo", "Quién tiene acceso: cualquier usuario". Copiar la URL
+   que termina en `/exec`.
+3. En `indicadores.py`, poner el id del Sheet en `ID_LIBRO` y la URL en
+   `URL_SCRIPT`. Commit y push.
+4. Importar lo que ya había en el Excel:
+   `python scripts/importar_indicadores.py "INDICADOR INSTITUCIONAL.xlsx" salida/ --anio 2026`
+   y pegar `salida/VALORES.csv` y `salida/METAS.csv` en sus pestañas (debajo
+   de la cabecera).
+5. Prueba manual: abrir la pestaña (la nota debe decir "en vivo"); guardar un
+   cambio con la clave buena (se ve en el Sheet); con una clave mala (no
+   escribe); abrir dos pestañas del navegador, guardar en una y luego en la
+   otra (la segunda recibe el aviso de conflicto); escribir `-1` (no deja
+   guardar).
+
+Si se cambia `indicadores.gs`, hay que volver a implementarlo (Implementar →
+Gestionar implementaciones → editar → versión nueva) para que la URL sirva el
+código nuevo.
+
 ## Generar el dashboard en tu equipo
 
 Una vez, para preparar el entorno:
