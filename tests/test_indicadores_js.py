@@ -121,3 +121,12 @@ def test_reemplazar_anio_solo_toca_ese_anio():
         {"anio": 2026, "mes": 2, "indicador": "navm", "n": 3, "d": 4}]
     assert r["control"] == {"2025": "a", "2026": "b"}
     assert r["indicadores"] == IND
+
+
+def test_el_borrador_guarda_la_marca_del_anio_que_se_empezo_a_editar():
+    """Si la lectura en vivo llega con la cuadrícula abierta, el guardado debe
+    seguir enviando la marca de los datos sobre los que se escribió: con la
+    nueva, el script no vería el conflicto y pisaría los cambios de otro."""
+    d = datos(control={"2026": "copia"})
+    assert ejecutar("m.borradorDeAnio(datos, 2026).actualizado", d) == "copia"
+    assert ejecutar("m.borradorDeAnio(datos, 2025).actualizado", d) == ""

@@ -1145,7 +1145,9 @@ const indicadoresMod = (() => {
       valores[id] = fila.meses.map(c => ({n: texto(c.n), d: texto(c.d)}));
       metas[id] = texto(fila.meta);
     }
-    return {anio, valores, metas};
+    // La marca del año tal como estaba al abrir la cuadrícula: es la que se
+    // envía al guardar, aunque la lectura en vivo llegue mientras se edita.
+    return {anio, actualizado: datos.control[anio] || '', valores, metas};
   }
 
   /** Borrador → lo que se envía al script, o las celdas mal escritas.
@@ -1766,13 +1768,16 @@ const views = (() => {
       // text/plain evita el preflight de CORS, que Apps Script no responde.
       headers: {'Content-Type': 'text/plain;charset=utf-8'},
       body: JSON.stringify({clave: ind.clave, anio,
-                            actualizado: ind.datos.control[anio] || '',
+                            actualizado: ind.borrador.actualizado,
                             valores: r.valores, metas: r.metas}),
     })
       .then(res => res.json())
       .then(res => {
         if (!res.ok) {
           if (res.error === 'Clave incorrecta') { ind.clave = ''; recordarClave(''); }
+          // Se vuelve a leer el libro sin tocar el borrador: al cancelar y
+          // editar de nuevo, la cuadrícula ya trae lo que guardó la otra persona.
+          if (res.conflicto) { ind.pedido = false; ind.vivo = false; pedirEnVivo(); }
           throw new Error(res.error);
         }
         recordarClave(ind.clave);

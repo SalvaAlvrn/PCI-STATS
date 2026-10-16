@@ -87,3 +87,16 @@ def test_misma_marca_no_es_conflicto_y_otra_si():
     assert ejecutar(f"hayConflicto({{'2026': '{marca}'}}, 2026, '{marca}')") is False
     assert ejecutar(f"hayConflicto({{'2026': '{marca}'}}, 2026, '')") is True
     assert ejecutar(f"hayConflicto({{}}, 2026, '{marca}')") is True
+
+
+def test_el_script_vuelca_las_escrituras_antes_de_soltar_el_cerrojo():
+    """Sin flush, la escritura puede no ser visible para el siguiente que tome
+    el cerrojo: leería la marca vieja y no vería el conflicto."""
+    codigo = GS.read_text(encoding="utf-8")
+    assert re.search(r"SpreadsheetApp\.flush\(\);\s*cerrojo\.releaseLock\(\);", codigo)
+
+
+@requiere_node
+def test_el_aviso_de_conflicto_no_manda_a_recargar():
+    """Recargar la página borra el borrador: el aviso no puede pedirlo."""
+    assert "recarga" not in ejecutar("MENSAJE_CONFLICTO").lower()

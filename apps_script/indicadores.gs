@@ -24,7 +24,9 @@ const CABECERAS = {
   CONTROL: ['ANIO', 'ACTUALIZADO'],
 };
 const MENSAJE_CONFLICTO =
-  'Otra persona guardó cambios en este año; recarga para verlos';
+  'Otra persona guardó cambios en este año mientras editabas. Tu borrador ' +
+  'sigue abierto: anota tus cambios, pulsa Cancelar y vuelve a Editar para ' +
+  'partir de los datos nuevos';
 
 // --- Funciones puras -------------------------------------------------------
 
@@ -160,6 +162,8 @@ function doPost(e) {
     return responder({ok: true, anio, valores: cuerpo.valores,
                       metas: cuerpo.metas, actualizado});
   } finally {
+    // Sin flush, el siguiente que tome el cerrojo podría leer la marca vieja.
+    SpreadsheetApp.flush();
     cerrojo.releaseLock();
   }
 }

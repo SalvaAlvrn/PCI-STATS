@@ -243,7 +243,9 @@ editar. Los números viven en un Google Sheet propio; las definiciones, en
   y, si no responde en 8 segundos, muestra la copia del último build.
 - **Editar**: botón "Editar", cuadrícula de N, D y meta, y la clave del equipo
   para guardar. Si otra persona guardó el mismo año mientras tanto, el guardado
-  se rechaza y hay que recargar; lo escrito no se pierde.
+  se rechaza sin perder lo escrito: hay que anotar los cambios, cancelar y
+  volver a editar, que ya trae los datos nuevos. Recargar la página borra el
+  borrador.
 
 ### Puesta en marcha (una vez)
 
