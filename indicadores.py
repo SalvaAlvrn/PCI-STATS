@@ -17,8 +17,9 @@ import iaas
 
 # Se rellenan en la puesta en marcha (sección 12 del diseño). La URL del
 # script es pública por naturaleza: la página la necesita para leer y guardar.
-ID_LIBRO = ""
-URL_SCRIPT = ""
+ID_LIBRO = "1_KZpsZGrRgHHmG9NZhl6YoRkdPnCC3FqxLZ4n8H7nz8"
+URL_SCRIPT = (
+    "https://script.google.com/macros/s/AKfycbzOBiwisUgTElEh1cGy3LVnWBqqOlIEb2jkNihvJYVARAo-al6UzRbj59qVpCK9JytRqA/exec")
 
 INDICADORES = [
     {"id": "incidencia_iaas", "nombre": "Tasa de Incidencia de IAAS",
