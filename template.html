@@ -187,6 +187,27 @@ tfoot td { font-weight: 600; border-top: 2px solid var(--border); border-bottom:
 .tip .v { font-weight: 600; font-size: 14px; color: var(--text-primary); }
 .tip .k { display: inline-block; width: 14px; height: 2px; vertical-align: middle; margin-right: 6px; }
 .tip .n { color: var(--text-secondary); }
+/* Indicadores institucionales */
+.ind-barra { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 12px 0; }
+.ind-barra select, .ind-barra input {
+  font: inherit; font-size: 13px; padding: 4px 8px; border-radius: 6px;
+  background: var(--surface); color: var(--text-primary); border: 1px solid var(--border);
+}
+.ind-tabla { overflow-x: auto; }
+.ind-tabla th, .ind-tabla td { white-space: nowrap; vertical-align: top; }
+.ind-tabla td.ind-nombre { white-space: normal; min-width: 220px; }
+.ind-t { font-weight: 600; font-variant-numeric: tabular-nums; }
+.ind-nd { color: var(--text-muted); font-size: 11px; font-variant-numeric: tabular-nums; }
+td.ind-sobre .ind-t { color: var(--critical); }
+td.ind-dentro .ind-t { color: var(--good); }
+td.ind-futuro { opacity: 0.45; }
+.ind-tabla input {
+  display: block; width: 72px; margin: 2px 0; padding: 3px 5px; font: inherit; font-size: 12px;
+  background: var(--surface); color: var(--text-primary); border: 1px solid var(--border); border-radius: 4px;
+}
+.ind-tabla input.ind-error { border-color: var(--critical); outline: 1px solid var(--critical); }
+.ind-mensaje.error { color: var(--critical); }
+.ind-mensaje.ok { color: var(--good); }
 </style>
 </head>
 <body>
@@ -205,6 +226,7 @@ tfoot td { font-weight: 600; border-top: 2px solid var(--border); border-bottom:
     <button role="tab" data-view="formulario" aria-selected="false">Por formulario</button>
     <button role="tab" data-view="iaas" aria-selected="false">Investigación de IAAS</button>
     <button role="tab" data-view="vigilancia" aria-selected="false">Vigilancia de IAAS</button>
+    <button role="tab" data-view="indicadores" aria-selected="false">Indicadores</button>
   </div>
 
   <section class="panel" aria-label="Filtros">
@@ -1642,6 +1664,7 @@ const views = (() => {
     // pasan por store.activeRows().
     if (estado.vista === 'iaas') { renderIaas(); return; }
     if (estado.vista === 'vigilancia') { renderVigilancia(); return; }
+    if (estado.vista === 'indicadores') { renderIndicadores(); return; }
     const filas = store.activeRows();
     if (!filas.length) {
       contenedor.appendChild(vacio('Sin registros para estos filtros.'));
@@ -1650,6 +1673,283 @@ const views = (() => {
     if (estado.vista === 'global') renderGlobal(filas);
     else if (estado.vista === 'responsable') renderResponsable(filas);
     else renderFormulario(filas);
+  }
+
+  // --- Indicadores institucionales -----------------------------------------
+  // Estado propio: sobrevive a los repintados y a los cambios de pestaña. La
+  // copia del build se pinta al instante; la lectura en vivo la reemplaza.
+  const ind = {
+    datos: {
+      indicadores: DATA.indicadores.indicadores,
+      valores: DATA.indicadores.ok ? DATA.indicadores.valores : [],
+      metas: DATA.indicadores.ok ? DATA.indicadores.metas : [],
+      control: DATA.indicadores.ok ? DATA.indicadores.control : {},
+    },
+    vivo: false,       // los datos vienen del script, no de la copia
+    leyendo: false,    // la lectura en vivo está en curso
+    pedido: false,     // la lectura en vivo se lanza una sola vez
+    anio: new Date().getFullYear(),
+    borrador: null,    // distinto de null mientras la cuadrícula está abierta
+    errores: [],
+    mensaje: null,     // {tipo: 'error' | 'ok', texto}
+    guardando: false,
+    clave: '',
+  };
+  const CLAVE_SESION = 'pci-indicadores-clave';
+  // sessionStorage puede no existir o lanzar (ventana privada, bloqueo): la
+  // clave solo es una comodidad, así que un fallo equivale a no tenerla.
+  try { ind.clave = sessionStorage.getItem(CLAVE_SESION) || ''; } catch (e) {}
+  function recordarClave(valor) {
+    try {
+      if (valor) sessionStorage.setItem(CLAVE_SESION, valor);
+      else sessionStorage.removeItem(CLAVE_SESION);
+    } catch (e) {}
+  }
+  const fmtInd = new Intl.NumberFormat('es', {maximumFractionDigits: 2});
+  const fmtNum = x => x === null ? '—' : fmtInd.format(x);
+
+  /** Lee el libro en vivo una vez. Si tarda más de 8 s, se queda la copia. */
+  function pedirEnVivo() {
+    const url = DATA.indicadores.url_script;
+    if (ind.pedido || !url) return;
+    ind.pedido = true;
+    ind.leyendo = true;
+    const corte = new AbortController();
+    const reloj = setTimeout(() => corte.abort(), 8000);
+    fetch(url, {signal: corte.signal})
+      .then(r => r.json())
+      .then(r => {
+        if (!r.ok) throw new Error(r.error);
+        ind.datos = {...ind.datos, valores: r.valores, metas: r.metas,
+                     control: r.control};
+        ind.vivo = true;
+      })
+      .catch(() => {})  // se queda la copia; la nota lo dice
+      .finally(() => {
+        clearTimeout(reloj);
+        ind.leyendo = false;
+        // Con la cuadrícula abierta no se repinta: se perdería el foco de lo
+        // que se está escribiendo. Si el año cambió, el guardado lo detecta.
+        if (estado.vista === 'indicadores' && !ind.borrador) render();
+      });
+  }
+
+  function notaFuente() {
+    const b = DATA.indicadores;
+    if (ind.vivo) return 'Datos en vivo del libro de indicadores.';
+    const copia = b.ok ? 'Copia de las ' + b.generado
+                       : 'Sin copia del build (' + b.error + ')';
+    return copia + (ind.leyendo ? ' · leyendo en vivo…'
+                    : b.url_script ? ' · no se pudo leer en vivo.' : '.');
+  }
+
+  function guardar() {
+    const r = indicadoresMod.validarBorrador(ind.borrador);
+    ind.errores = r.errores;
+    if (r.errores.length) {
+      ind.mensaje = {tipo: 'error', texto: r.errores.length +
+        ' celda(s) no son un número mayor o igual que 0. No se guardó nada.'};
+      render();
+      return;
+    }
+    if (!ind.clave) {
+      ind.mensaje = {tipo: 'error', texto: 'Escribe la clave para guardar.'};
+      render();
+      return;
+    }
+    const anio = ind.borrador.anio;
+    ind.guardando = true;
+    ind.mensaje = null;
+    render();
+    fetch(DATA.indicadores.url_script, {
+      method: 'POST',
+      // text/plain evita el preflight de CORS, que Apps Script no responde.
+      headers: {'Content-Type': 'text/plain;charset=utf-8'},
+      body: JSON.stringify({clave: ind.clave, anio,
+                            actualizado: ind.datos.control[anio] || '',
+                            valores: r.valores, metas: r.metas}),
+    })
+      .then(res => res.json())
+      .then(res => {
+        if (!res.ok) {
+          if (res.error === 'Clave incorrecta') { ind.clave = ''; recordarClave(''); }
+          throw new Error(res.error);
+        }
+        recordarClave(ind.clave);
+        ind.datos = indicadoresMod.reemplazarAnio(
+          ind.datos, anio, res.valores, res.metas, res.actualizado);
+        ind.borrador = null;
+        ind.mensaje = {tipo: 'ok', texto: 'Guardado.'};
+      })
+      // El borrador se conserva: nadie pierde lo escrito por un fallo.
+      .catch(err => { ind.mensaje = {tipo: 'error', texto: 'No se guardó: ' + err.message}; })
+      .finally(() => { ind.guardando = false; render(); });
+  }
+
+  function boton(texto, alPulsar, deshabilitado) {
+    const b = document.createElement('button');
+    b.className = 'chip';
+    b.type = 'button';
+    b.textContent = texto;
+    b.disabled = !!deshabilitado;
+    b.addEventListener('click', alPulsar);
+    return b;
+  }
+
+  function celdaTexto(etiqueta, texto, clase) {
+    const el = document.createElement(etiqueta);
+    el.textContent = texto;
+    if (clase) el.className = clase;
+    return el;
+  }
+
+  /** Celda de la vista: T grande y N/D debajo, coloreada frente a la meta. */
+  function celdaMes(c, futuro) {
+    const td = document.createElement('td');
+    td.className = 'num' + (c.estado ? ' ind-' + c.estado : '') + (futuro ? ' ind-futuro' : '');
+    td.append(celdaTexto('div', fmtNum(c.t), 'ind-t'));
+    if (c.n !== null || c.d !== null) {
+      td.append(celdaTexto('div', fmtNum(c.n) + ' / ' + fmtNum(c.d), 'ind-nd'));
+    }
+    return td;
+  }
+
+  function entrada(valor, conError, alEscribir, etiqueta) {
+    const input = document.createElement('input');
+    input.type = 'text';
+    input.inputMode = 'decimal';
+    input.value = valor;
+    input.placeholder = etiqueta;
+    input.setAttribute('aria-label', etiqueta);
+    if (conError) input.classList.add('ind-error');
+    input.addEventListener('input', () => {
+      alEscribir(input.value);
+      input.classList.toggle('ind-error', !indicadoresMod.validar(input.value).ok);
+    });
+    return input;
+  }
+
+  /** Celda del editor: N y D, y la T que resulta mientras se escribe. */
+  function celdaEditor(id, k, mes) {
+    const td = document.createElement('td');
+    const celda = ind.borrador.valores[id][mes - 1];
+    const conError = campo => ind.errores.some(e =>
+      e.indicador === id && e.mes === mes && e.campo === campo);
+    const t = celdaTexto('div', '', 'ind-nd');
+    const recalcular = () => {
+      const n = indicadoresMod.validar(celda.n);
+      const d = indicadoresMod.validar(celda.d);
+      t.textContent = n.ok && d.ok
+        ? 'T ' + fmtNum(indicadoresMod.tasa(n.valor, d.valor, k)) : 'T —';
+    };
+    td.append(
+      entrada(celda.n, conError('n'), v => { celda.n = v; recalcular(); }, 'N'),
+      entrada(celda.d, conError('d'), v => { celda.d = v; recalcular(); }, 'D'),
+      t);
+    recalcular();
+    return td;
+  }
+
+  function renderIndicadores() {
+    const b = DATA.indicadores;
+    pedirEnVivo();
+    if (!b.ok && !b.url_script) {
+      contenedor.appendChild(vacio('Indicadores no disponibles: ' + b.error));
+      return;
+    }
+    const editando = ind.borrador !== null;
+    const tarjeta = card('Indicadores institucionales de PCI',
+      'T = N / D · k. Con meta, en rojo los meses que la superan y en verde ' +
+      'los que no. La meta es un tope.');
+    tarjeta.appendChild(celdaTexto('div', notaFuente(), 'sub'));
+
+    const barraInd = document.createElement('div');
+    barraInd.className = 'ind-barra';
+    if (!editando) {
+      const selector = document.createElement('select');
+      selector.setAttribute('aria-label', 'Año');
+      indicadoresMod.anios(ind.datos, new Date().getFullYear()).forEach(a => {
+        const o = document.createElement('option');
+        o.value = a;
+        o.textContent = a;
+        o.selected = a === ind.anio;
+        selector.appendChild(o);
+      });
+      selector.addEventListener('change', () => { ind.anio = Number(selector.value); render(); });
+      barraInd.appendChild(selector);
+      if (b.url_script) {
+        barraInd.appendChild(boton('Editar', () => {
+          ind.borrador = indicadoresMod.borradorDeAnio(ind.datos, ind.anio);
+          ind.errores = [];
+          ind.mensaje = null;
+          render();
+        }));
+      }
+    } else {
+      barraInd.appendChild(celdaTexto('strong', 'Editando ' + ind.borrador.anio));
+      const clave = document.createElement('input');
+      clave.type = 'password';
+      clave.placeholder = 'Clave';
+      clave.setAttribute('aria-label', 'Clave');
+      clave.autocomplete = 'current-password';
+      clave.value = ind.clave;
+      clave.addEventListener('input', () => { ind.clave = clave.value; });
+      barraInd.append(
+        clave,
+        boton(ind.guardando ? 'Guardando…' : 'Guardar', guardar, ind.guardando),
+        boton('Cancelar', () => {
+          ind.borrador = null;
+          ind.errores = [];
+          ind.mensaje = null;
+          render();
+        }, ind.guardando));
+    }
+    if (ind.mensaje) {
+      barraInd.appendChild(celdaTexto('span', ind.mensaje.texto,
+                                      'ind-mensaje ' + ind.mensaje.tipo));
+    }
+    tarjeta.appendChild(barraInd);
+
+    const anio = editando ? ind.borrador.anio : ind.anio;
+    const hoy = new Date();
+    const mesFuturo = mes => anio > hoy.getFullYear() ||
+      (anio === hoy.getFullYear() && mes > hoy.getMonth() + 1);
+
+    const tabla = document.createElement('table');
+    const cabeza = document.createElement('tr');
+    cabeza.append(celdaTexto('th', 'Indicador'), celdaTexto('th', 'Meta', 'num'));
+    indicadoresMod.MESES.forEach(m => cabeza.append(celdaTexto('th', m, 'num')));
+    tabla.appendChild(document.createElement('thead')).appendChild(cabeza);
+    const cuerpo = tabla.appendChild(document.createElement('tbody'));
+
+    for (const fila of indicadoresMod.tablaAnio(ind.datos, anio)) {
+      const id = fila.indicador.id;
+      const tr = document.createElement('tr');
+      const nombre = celdaTexto('td', fila.indicador.nombre, 'ind-nombre');
+      nombre.title = 'N: ' + fila.indicador.numerador + '\nD: ' +
+        fila.indicador.denominador + '\nk = ' + fila.indicador.k;
+      nombre.appendChild(celdaTexto('div', '×' + fila.indicador.k, 'ind-nd'));
+      tr.appendChild(nombre);
+      if (editando) {
+        const tdMeta = document.createElement('td');
+        tdMeta.appendChild(entrada(ind.borrador.metas[id],
+          ind.errores.some(e => e.indicador === id && e.campo === 'meta'),
+          v => { ind.borrador.metas[id] = v; }, 'Meta'));
+        tr.appendChild(tdMeta);
+        for (let mes = 1; mes <= 12; mes++) {
+          tr.appendChild(celdaEditor(id, fila.indicador.k, mes));
+        }
+      } else {
+        tr.appendChild(celdaTexto('td', fmtNum(fila.meta), 'num'));
+        fila.meses.forEach((c, i) => tr.appendChild(celdaMes(c, mesFuturo(i + 1))));
+      }
+      cuerpo.appendChild(tr);
+    }
+    const zona = document.createElement('div');
+    zona.className = 'ind-tabla';
+    zona.appendChild(tabla);
+    tarjeta.appendChild(zona);
+    contenedor.appendChild(tarjeta);
   }
 
   // renderGlobal, renderResponsable y renderFormulario se añaden en las
@@ -3225,6 +3525,12 @@ const app = (() => {
     // fuente no existen en las otras y saldrían como selectores muertos.
     barra.replaceChildren();
     controles.length = 0;
+    // Los indicadores no se filtran: son una cuadrícula por año. Sin esto
+    // saldrían los filtros de supervisiones, que no les aplican.
+    const panel = barra.closest('.panel');
+    const sinFiltros = views.estado.vista === 'indicadores';
+    panel.style.display = sinFiltros ? 'none' : '';
+    if (sinFiltros) return;
     const fuente = fuenteActual();
     // Sin datos no hay qué filtrar; el aviso lo pinta la vista. En IAAS el
     // rango sale de producción y, si solo llegaron los casos, de los casos.
